@@ -118,6 +118,7 @@ async function processMatch(nick, forceSend = false, interaction = null) {
 
     const player = await getPlayer(nick);
     const lastMatch = await getLastMatch(player.player_id);
+
     if (!lastMatch) {
       console.log(`[INFO] Brak meczów dla ${nick}`);
       return;
@@ -128,69 +129,82 @@ async function processMatch(nick, forceSend = false, interaction = null) {
       return;
     }
 
-    console.log(`[INFO] Nowy mecz wykryty: ${lastMatch.match_id}`);
-
     const stats = await getMatchStats(lastMatch.match_id);
-    if (!stats.rounds || !stats.rounds[0]) {
+    const round = stats?.rounds?.[0];
+
+    if (!round) {
       console.log(`[WARN] Brak rund w statystykach meczu ${lastMatch.match_id}`);
       return;
     }
 
-    const round = stats.rounds[0];
-    const map = round.round_stats.Map;
-    const score = round.round_stats.Score;
+    const map = round?.round_stats?.Map || "-";
+    const score = round?.round_stats?.Score || "-";
 
-    const currentElo = player.games.cs2.faceit_elo;
-    const oldElo = playerCache[nick] || currentElo;
+    const currentElo = Number(player?.games?.cs2?.faceit_elo ?? 0);
+    const oldElo = Number(playerCache[nick] ?? currentElo);
     const eloChange = currentElo - oldElo;
 
     playerCache[nick] = currentElo;
 
     let playersToShow = [];
-
     if (MODE === "ALL") {
-      playersToShow = round.teams.flatMap(t => t.players);
+      playersToShow = (round.teams || []).flatMap(t => t.players || []);
     } else {
-      const team = round.teams.find(team =>
-        team.players.some(p => p.nickname.toLowerCase() === nick.toLowerCase())
+      const team = (round.teams || []).find(t =>
+        (t.players || []).some(p => p.nickname?.toLowerCase() === nick.toLowerCase())
       );
-      if (!team) return;
-      playersToShow = team.players;
+      if (!team) {
+        console.log(`[WARN] Nie znaleziono drużyny gracza ${nick} w meczu ${lastMatch.match_id}`);
+        return;
+      }
+      playersToShow = team.players || [];
     }
 
-    // Poprawione ADR jeśli undefined
+    // Normalizacja statystyk pod embed (żeby nie było undefined).
     playersToShow = playersToShow.map(p => {
-      if (!p.player_stats["Average Damage per Round"]) {
-        p.player_stats["Average Damage per Round"] = "-";
-      }
-      return p;
+      const s = p.player_stats || {};
+      return {
+        ...p,
+        player_stats: {
+          ...s,
+          Kills: s.Kills ?? "-",
+          Deaths: s.Deaths ?? "-",
+          "K/D Ratio": s["K/D Ratio"] ?? "-",
+          "Average Damage per Round": s["Average Damage per Round"] ?? "-",
+          "Headshots %": s["Headshots %"] ?? "-"
+        }
+      };
     });
 
     const embed = buildEmbed(nick, map, score, oldElo, currentElo, eloChange, playersToShow);
-    const mention = getMention(nick); // ping opcjonalny
+    const mention = getMention(nick);
 
-    console.log(`[DEBUG] Wysyłam embed na kanał ${CHANNEL_ID}`);
-    console.log(`[DEBUG] Mention: ${mention}`);
+    // Kluczowa poprawka: ten sam payload (ping + embed) dla auto tick i /checkmatch.
+    const messagePayload = {
+      content: mention ? `${mention}` : "",
+      embeds: [embed]
+    };
 
     if (interaction) {
-      // komenda slash
-      await interaction.reply({ content: mention || "", embeds: [embed] });
+      if (interaction.replied || interaction.deferred) {
+        await interaction.followUp(messagePayload);
+      } else {
+        await interaction.reply(messagePayload);
+      }
     } else {
       const channel = await client.channels.fetch(CHANNEL_ID);
-
-      if (!channel) {
-        console.log(`[ERROR] Nie znaleziono kanału o ID ${CHANNEL_ID}`);
+      if (!channel || !channel.isTextBased()) {
+        console.log(`[ERROR] Nieprawidłowy kanał docelowy: ${CHANNEL_ID}`);
         return;
       }
 
-      // WAŻNE: content pusty string jeśli brak pingu, aby embed zawsze się wyświetlał
-      await channel.send({ content: mention ? mention + " " : "", embeds: [embed] });
+      await channel.send(messagePayload);
+
       checkedMatches.add(lastMatch.match_id);
       saveMatches();
     }
 
     console.log(`[SUCCESS] Wysłano mecz ${lastMatch.match_id}`);
-
   } catch (err) {
     console.error("[ERROR] Błąd podczas przetwarzania meczu:", err.response?.data || err.message);
   }
