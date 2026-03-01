@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, SlashCommandBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
 const axios = require('axios');
 const fs = require('fs');
 const express = require("express");
@@ -8,7 +8,7 @@ const express = require("express");
 const app = express();
 const port = process.env.PORT || 3000;
 app.get("/", (req, res) => res.send("Bot is alive!"));
-app.listen(port, () => console.log(`[KEEP-ALIVE] Server running on port ${port}`));
+app.listen(port, () => console.log(`Server running on port ${port}`));
 // =============================================
 
 const client = new Client({
@@ -30,10 +30,12 @@ if (!FACEIT_NICKS) {
 }
 
 const nicknames = FACEIT_NICKS.split(',').map(n => n.trim());
-let checkedMatches = new Set();
-let playerCache = {}; // przechowuje poprzednie ELO
 
-// ================= FILE CACHE =================
+let checkedMatches = new Set();
+let playerCache = {};
+let zmeczStats = {};
+
+// ================= FILE STORAGE =================
 const saveMatches = () => {
   fs.writeFileSync('matches.json', JSON.stringify([...checkedMatches]));
 };
@@ -41,6 +43,16 @@ const saveMatches = () => {
 const loadMatches = () => {
   if (fs.existsSync('matches.json')) {
     checkedMatches = new Set(JSON.parse(fs.readFileSync('matches.json')));
+  }
+};
+
+const saveLeaderboard = () => {
+  fs.writeFileSync('leaderboard.json', JSON.stringify(zmeczStats, null, 2));
+};
+
+const loadLeaderboard = () => {
+  if (fs.existsSync('leaderboard.json')) {
+    zmeczStats = JSON.parse(fs.readFileSync('leaderboard.json'));
   }
 };
 
@@ -98,19 +110,14 @@ async function processMatch(nick, forceSend = false, interaction = null) {
     const map = round.round_stats.Map;
     const score = round.round_stats.Score;
 
-    // ===== ELO DLA WSZYSTKICH =====
-    const trackedNicks = nicknames;
     let eloLines = "";
-
-    for (const n of trackedNicks) {
+    for (const n of nicknames) {
       try {
         const playerData = await getPlayer(n);
         const currentElo = playerData.games?.cs2?.faceit_elo || 0;
         const previousElo = playerCache[n] != null ? playerCache[n] : "X";
-
         eloLines += `-${n} ${previousElo} → ${currentElo}\n`;
-
-        playerCache[n] = currentElo; // aktualizacja cache
+        playerCache[n] = currentElo;
       } catch {
         eloLines += `-${n} brak danych\n`;
       }
@@ -130,7 +137,7 @@ async function processMatch(nick, forceSend = false, interaction = null) {
       hour:'2-digit', minute:'2-digit'
     });
 
-    const mentions = trackedNicks.map(getMention).join(' ');
+    const mentions = nicknames.map(getMention).join(' ');
 
     const message = `📊 Raport z Faceit ${mentions}
 📅 Data wydarzenia: ${eventTime}
@@ -171,26 +178,36 @@ async function checkMatches() {
 client.once('ready', async () => {
   console.log(`Zalogowano jako ${client.user.tag}`);
   loadMatches();
+  loadLeaderboard();
 
-  const commandCheck = new SlashCommandBuilder()
-    .setName('checkmatch')
-    .setDescription('Sprawdza ostatni mecz gracza')
-    .addStringOption(option =>
-      option.setName('nick')
-        .setDescription('Nick FACEIT')
-        .setRequired(true)
-    );
+  const commands = [
+    new SlashCommandBuilder()
+      .setName('checkmatch')
+      .setDescription('Sprawdza ostatni mecz gracza')
+      .addStringOption(option =>
+        option.setName('nick').setDescription('Nick FACEIT').setRequired(true)
+      ),
 
-  const commandZmecz = new SlashCommandBuilder()
-    .setName('zmecz_zweiha')
-    .setDescription('Oznacza, że ktoś zmeczył Zweiha 🍆');
+    new SlashCommandBuilder()
+      .setName('zmecz_zweiha')
+      .setDescription('Oznacza, że ktoś zmeczył Zweiha 🍆'),
 
-  if (GUILD_ID) {
-    await client.application.commands.create(commandCheck, GUILD_ID);
-    await client.application.commands.create(commandZmecz, GUILD_ID);
-  } else {
-    await client.application.commands.create(commandCheck);
-    await client.application.commands.create(commandZmecz);
+    new SlashCommandBuilder()
+      .setName('leaderboard')
+      .setDescription('Pokazuje ranking zmeczenia Zweiha'),
+
+    new SlashCommandBuilder()
+      .setName('resetleaderboard')
+      .setDescription('Resetuje leaderboard')
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+  ];
+
+  for (const command of commands) {
+    if (GUILD_ID) {
+      await client.application.commands.create(command, GUILD_ID);
+    } else {
+      await client.application.commands.create(command);
+    }
   }
 
   const interval = Number(CHECK_INTERVAL) || 180000;
@@ -208,10 +225,47 @@ client.on('interactionCreate', async interaction => {
   }
 
   if (interaction.commandName === 'zmecz_zweiha') {
-    const userMention = `<@${interaction.user.id}>`;
+    const userId = interaction.user.id;
+    if (!zmeczStats[userId]) zmeczStats[userId] = 0;
+    zmeczStats[userId] += 1;
+    saveLeaderboard();
+
     await interaction.reply({
-      content: `${userMention} zmeczył Zweiha 🍆 🤬`
+      content: `<@${userId}> zmeczył Zweiha 🍆 🤬`
     });
+  }
+
+  if (interaction.commandName === 'leaderboard') {
+    const sorted = Object.entries(zmeczStats)
+      .filter(e => e[1] > 0)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10);
+
+    if (sorted.length === 0) {
+      return interaction.reply({ content: "Leaderboard:\nBrak danych." });
+    }
+
+    let text = "Leaderboard:\n";
+
+    sorted.forEach((entry, index) => {
+      const [userId, count] = entry;
+
+      let pos;
+      if (index === 0) pos = "🥇";
+      else if (index === 1) pos = "🥈";
+      else if (index === 2) pos = "🥉";
+      else pos = `${index + 1}.`;
+
+      text += `${pos} <@${userId}> ${count}\n`;
+    });
+
+    await interaction.reply({ content: text });
+  }
+
+  if (interaction.commandName === 'resetleaderboard') {
+    zmeczStats = {};
+    saveLeaderboard();
+    await interaction.reply({ content: "Leaderboard został zresetowany." });
   }
 });
 
