@@ -118,17 +118,23 @@ async function processMatch(nick, forceSend = false, interaction = null) {
 
     const player = await getPlayer(nick);
     const lastMatch = await getLastMatch(player.player_id);
-    if (!lastMatch) return;
+    if (!lastMatch) {
+      console.log(`[INFO] Brak meczów dla ${nick}`);
+      return;
+    }
 
     if (checkedMatches.has(lastMatch.match_id) && !forceSend) {
       console.log(`[INFO] Mecz ${lastMatch.match_id} już był wysłany.`);
       return;
     }
 
-    console.log(`[INFO] Nowy mecz: ${lastMatch.match_id}`);
+    console.log(`[INFO] Nowy mecz wykryty: ${lastMatch.match_id}`);
 
     const stats = await getMatchStats(lastMatch.match_id);
-    if (!stats.rounds || !stats.rounds[0]) return;
+    if (!stats.rounds || !stats.rounds[0]) {
+      console.log(`[WARN] Brak rund w statystykach meczu ${lastMatch.match_id}`);
+      return;
+    }
 
     const round = stats.rounds[0];
     const map = round.round_stats.Map;
@@ -146,28 +152,30 @@ async function processMatch(nick, forceSend = false, interaction = null) {
       playersToShow = round.teams.flatMap(t => t.players);
     } else {
       const team = round.teams.find(team =>
-        team.players.some(p =>
-          p.nickname.toLowerCase() === nick.toLowerCase()
-        )
+        team.players.some(p => p.nickname.toLowerCase() === nick.toLowerCase())
       );
       if (!team) return;
       playersToShow = team.players;
     }
 
     const embed = buildEmbed(nick, map, score, oldElo, currentElo, eloChange, playersToShow);
+    const mention = getMention(nick) || nick;
+
+    console.log(`[DEBUG] Wysyłam embed na kanał ${CHANNEL_ID}`);
+    console.log(`[DEBUG] Mention: ${mention}`);
+    console.log(embed);
 
     if (interaction) {
-      await interaction.reply({ embeds: [embed] });
+      await interaction.reply({ content: mention, embeds: [embed] });
     } else {
       const channel = await client.channels.fetch(CHANNEL_ID);
+
       if (!channel) {
-        console.error("[ERROR] CHANNEL_ID nie jest poprawny lub bot nie ma dostępu do kanału");
+        console.log(`[ERROR] Nie znaleziono kanału o ID ${CHANNEL_ID}`);
         return;
       }
-      await channel.send({
-        content: getMention(nick),
-        embeds: [embed]
-      });
+
+      await channel.send({ content: mention, embeds: [embed] });
       checkedMatches.add(lastMatch.match_id);
       saveMatches();
     }
@@ -175,7 +183,7 @@ async function processMatch(nick, forceSend = false, interaction = null) {
     console.log(`[SUCCESS] Wysłano mecz ${lastMatch.match_id}`);
 
   } catch (err) {
-    console.error("[ERROR]", err.response?.data || err.message);
+    console.error("[ERROR] Błąd podczas przetwarzania meczu:", err.response?.data || err.message);
   }
 }
 
