@@ -44,7 +44,7 @@ if (!FACEIT_NICKS) {
 
 const nicknames = FACEIT_NICKS.split(',').map(n => n.trim());
 let checkedMatches = new Set();
-let playerCache = {};
+let playerCache = {}; // przechowuje aktualne ELO gracza po ostatnim meczu
 
 const saveMatches = () => {
   fs.writeFileSync('matches.json', JSON.stringify([...checkedMatches]));
@@ -56,8 +56,8 @@ const loadMatches = () => {
   }
 };
 
+// ================== FACEIT API =================
 async function getPlayer(nick) {
-  console.log(`[DEBUG] Pobieram dane gracza: ${nick}`);
   const res = await axios.get(
     `https://open.faceit.com/data/v4/players?nickname=${nick}`,
     { headers: { Authorization: `Bearer ${FACEIT_API_KEY}` } }
@@ -66,7 +66,6 @@ async function getPlayer(nick) {
 }
 
 async function getLastMatch(playerId) {
-  console.log(`[DEBUG] Pobieram ostatni mecz dla playerId: ${playerId}`);
   const res = await axios.get(
     `https://open.faceit.com/data/v4/players/${playerId}/history?game=cs2&limit=1`,
     { headers: { Authorization: `Bearer ${FACEIT_API_KEY}` } }
@@ -75,7 +74,6 @@ async function getLastMatch(playerId) {
 }
 
 async function getMatchStats(matchId) {
-  console.log(`[DEBUG] Pobieram statystyki meczu: ${matchId}`);
   const res = await axios.get(
     `https://open.faceit.com/data/v4/matches/${matchId}/stats`,
     { headers: { Authorization: `Bearer ${FACEIT_API_KEY}` } }
@@ -88,6 +86,17 @@ function getMention(nick) {
   return id ? `<@${id}>` : nick;
 }
 
+function formatDate(timestamp) {
+  const d = new Date(timestamp);
+  const day = String(d.getDate()).padStart(2, '0');
+  const month = String(d.getMonth()+1).padStart(2, '0');
+  const year = d.getFullYear();
+  const hours = String(d.getHours()).padStart(2,'0');
+  const minutes = String(d.getMinutes()).padStart(2,'0');
+  return `${day}/${month}/${year} ${hours}:${minutes}`;
+}
+
+// ================== PROCESS MATCH =================
 async function processMatch(nick, forceSend = false, interaction = null) {
   try {
     console.log(`\n[CHECK ${new Date().toLocaleTimeString()}] ${nick}`);
@@ -110,26 +119,26 @@ async function processMatch(nick, forceSend = false, interaction = null) {
     const map = round.round_stats.Map;
     const score = round.round_stats.Score;
 
-    // wybieramy tylko drużynę gracza
+    // drużyna gracza
     const team = round.teams.find(t =>
       t.players.some(p => p.nickname.toLowerCase() === nick.toLowerCase())
     );
     if (!team) return;
 
-    // Aktualne ELO dla śledzonych nicków
+    // aktualne ELO śledzonych graczy
     const trackedNicks = ["Deflerix", "W4KKY", "pawik100737"];
     let eloLines = [];
     for (const n of trackedNicks) {
       const pData = await getPlayer(n);
-      const old = playerCache[n] || pData.games.cs2.faceit_elo;
-      const cur = pData.games.cs2.faceit_elo;
-      playerCache[n] = cur;
+      const cur = pData.games.cs2.faceit_elo || 0;
+      const old = playerCache[n] || cur; // jeśli brak w cache, używa aktualnego
+      playerCache[n] = cur; // zapisuje aktualne jako poprzednie na przyszłość
       eloLines.push(`-${n} ${old} → ${cur}`);
     }
     eloLines = eloLines.join("\n");
 
     // Data wydarzenia
-    const eventTime = new Date(lastMatch.finished_at || lastMatch.started_at || Date.now()).toLocaleString();
+    const eventTime = formatDate(lastMatch.finished_at || lastMatch.started_at || Date.now());
 
     // Mentions
     const mentions = trackedNicks.map(n => getMention(n)).join(' ');
@@ -137,10 +146,9 @@ async function processMatch(nick, forceSend = false, interaction = null) {
     // Statystyki drużyny gracza
     const playersStats = team.players.map(p => {
       const s = p.player_stats || {};
-      return `${p.nickname} ${s.Kills || 0}/${s.Deaths || 0} ${s["K/D Ratio"] || "-"} ${s["Average Damage per Round"] || "-"} ${s["Headshots %"] || "-"}`;
+      return `${p.nickname} K/D: ${s.Kills || 0}/${s.Deaths || 0} K/Dśr: ${s["K/D Ratio"] || "-"} ADR: ${s["Average Damage per Round"] || "-"} HS%: ${s["Headshots %"] || "-"}`;
     }).join("\n");
 
-    // Kompletna wiadomość
     const message = `📊 Raport z Faceit ${mentions}
 📅 Data wydarzenia: ${eventTime}
 🎯 Wynik: ${score}
@@ -205,8 +213,8 @@ client.once('ready', async () => {
   const interval = Number(CHECK_INTERVAL) || 180000;
   console.log(`[INFO] Interval ustawiony na ${interval} ms`);
 
-  await checkMatches(); // natychmiastowe sprawdzenie po starcie
-  setInterval(checkMatches, interval); // cykliczne sprawdzanie
+  await checkMatches();
+  setInterval(checkMatches, interval);
 });
 // =============================================
 
