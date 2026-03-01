@@ -13,8 +13,8 @@ const app = express();
 const port = process.env.PORT || 3000;
 app.get("/", (req, res) => res.send("Bot is alive!"));
 app.listen(port, () => console.log(`[KEEP-ALIVE] Server running on port ${port}`));
-// =============================================
 
+// ================= ENV DEBUG =================
 console.log("=== ENV DEBUG START ===");
 console.log("CHANNEL_ID:", process.env.CHANNEL_ID);
 console.log("GUILD_ID:", process.env.GUILD_ID);
@@ -76,7 +76,6 @@ function getMention(nick) {
 }
 
 function formatDate(timestamp) {
-  // timestamp w sekundach lub Date.now() fallback
   const d = timestamp ? new Date(timestamp*1000) : new Date();
   const day = String(d.getDate()).padStart(2,'0');
   const month = String(d.getMonth()+1).padStart(2,'0');
@@ -89,8 +88,6 @@ function formatDate(timestamp) {
 // ================== PROCESS MATCH =================
 async function processMatch(nick, forceSend = false, interaction = null) {
   try {
-    console.log(`\n[CHECK ${new Date().toLocaleTimeString()}] ${nick}`);
-
     const player = await getPlayer(nick);
     const lastMatch = await getLastMatch(player.player_id);
     if (!lastMatch) return;
@@ -109,6 +106,8 @@ async function processMatch(nick, forceSend = false, interaction = null) {
     );
     if (!team) return;
 
+    const enemyTeam = round.teams.find(t => t !== team);
+
     // Śledzeni gracze
     const trackedNicks = ["Deflerix", "W4KKY", "pawik100737"];
     let eloLines = [];
@@ -124,11 +123,15 @@ async function processMatch(nick, forceSend = false, interaction = null) {
     const eventTime = formatDate(lastMatch.finished_at || lastMatch.started_at || Date.now());
     const mentions = trackedNicks.map(n => getMention(n)).join(' ');
 
-    // Statystyki graczy – w tabeli markdown
-    const playersStats = team.players.map(p => {
-      const s = p.player_stats || {};
-      return `\`${p.nickname.padEnd(12)} | K/D: ${String(s.Kills||0).padStart(2,'0')}/${String(s.Deaths||0).padStart(2,'0')} | K/Dśr: ${String(s["K/D Ratio"]||"-").padEnd(4)} | ADR: ${String(s["Average Damage per Round"]||"-").padEnd(5)} | HS%: ${String(s["Headshots %"]||"-").padEnd(3)}\``;
-    }).join("\n");
+    function formatPlayerStats(players) {
+      return players.map(p => {
+        const s = p.player_stats || {};
+        const kdRatio = s["K/D Ratio"] || 0;
+        const kdEmoji = kdRatio >= 1 ? "🟢" : "🔴";
+        const adr = s["Average Damage per Round"] != null ? s["Average Damage per Round"].toFixed(2) : "-";
+        return `\`${p.nickname.padEnd(12)} | K/D: ${String(s.Kills||0).padStart(2,'0')}/${String(s.Deaths||0).padStart(2,'0')} | K/Dśr: ${kdRatio.toFixed(2).padEnd(4)} | ADR: ${adr.padEnd(5)} | HS%: ${String(s["Headshots %"]||"-").padEnd(3)} ${kdEmoji}\``;
+      }).join("\n");
+    }
 
     const message = `📊 Raport z Faceit ${mentions}
 📅 Data wydarzenia: ${eventTime}
@@ -137,8 +140,11 @@ async function processMatch(nick, forceSend = false, interaction = null) {
 📈 Zmiana ELO:
 ${eloLines}
 
-📋 Statystyki graczy:
-${playersStats}`;
+**OUR TEAM**
+${formatPlayerStats(team.players)}
+
+**ENEMY TEAM**
+${formatPlayerStats(enemyTeam.players)}`;
 
     if (interaction) {
       await interaction.reply({ content: message });
