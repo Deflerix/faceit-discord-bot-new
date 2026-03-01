@@ -187,7 +187,7 @@ client.once('ready', async () => {
 
   // Komenda /zmeczZweiha
   const zmeczZweihaCommand = new SlashCommandBuilder()
-    .setName('zmeczZweiha')
+    .setName('zmecz_zweiha')
     .setDescription('Pinguje osobę i mówi, że zmęczyła Zweiha 🍆🤬');
 
   if (GUILD_ID) {
