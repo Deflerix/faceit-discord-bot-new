@@ -2,6 +2,13 @@ require('dotenv').config();
 const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
 const axios = require('axios');
 const fs = require('fs');
+const express = require("express"); // <- dodane keep-alive
+
+// ===== Express keep-alive =====
+const app = express();
+const port = process.env.PORT || 3000;
+app.get("/", (req, res) => res.send("Bot is alive!"));
+app.listen(port, () => console.log(`Keep-alive server running on port ${port}`));
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds]
@@ -71,9 +78,7 @@ HS%: ${s["Headshots %"]}`;
 
 async function checkMatches() {
   try {
-
     for (const nick of nicknames) {
-
       const player = await getPlayer(nick);
       const lastMatch = await getLastMatch(player.player_id);
       if (!lastMatch) continue;
