@@ -111,17 +111,16 @@ async function processMatch(nick, forceSend = false, interaction = null) {
     const map = round.round_stats.Map;
     const score = round.round_stats.Score;
 
-    // ===================== ELO =====================
+    // aktualne elo
     const trackedNicks = ["Deflerix", "W4KKY", "pawik100737"];
     let eloLines = trackedNicks.map(n => {
       const p = round.teams.flatMap(t => t.players).find(pl => pl.nickname === n);
       if (!p) return `-${n}: brak danych`;
       const cur = p.games?.cs2?.faceit_elo || 0;
-      const old = playerCache[n] !== undefined ? playerCache[n] : cur; // jeśli pierwszy raz, old = current
-      playerCache[n] = cur; // zapisujemy aktualne ELO do cache
+      const old = playerCache[n] !== undefined ? playerCache[n] : cur; // pierwszy raz old = current
+      playerCache[n] = cur; // zapisujemy aktualne na przyszłość
       return `-${n} ${old} → ${cur}`;
     }).join("\n");
-    // ==============================================
 
     // Drużyna naszego gracza
     const ourTeam = round.teams.find(t => t.players.some(p => p.nickname.toLowerCase() === nick.toLowerCase()));
@@ -131,11 +130,8 @@ async function processMatch(nick, forceSend = false, interaction = null) {
     const enemyTeamStats = enemyTeam ? formatPlayerStats(enemyTeam.players) : "Brak przeciwników";
 
     // Czas wydarzenia
-    const eventTimeRaw = lastMatch.finished_at || lastMatch.started_at || Date.now();
-    const eventTime = new Date(eventTimeRaw * 1000).toLocaleString('pl-PL', { 
-      day:'2-digit', month:'2-digit', year:'numeric', 
-      hour:'2-digit', minute:'2-digit' 
-    });
+    const eventTimeRaw = lastMatch.finished_at || lastMatch.started_at || Math.floor(Date.now()/1000);
+    const eventTime = new Date(eventTimeRaw * 1000).toLocaleString('pl-PL', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
 
     const mentions = trackedNicks.map(getMention).join(' ');
 
@@ -183,10 +179,11 @@ client.once('ready', async () => {
   console.log(`Zalogowano jako ${client.user.tag}`);
   loadMatches();
 
-  // Inicjalizacja cache ELO przy starcie
+  // inicjalizacja playerCache z ELO graczy
   for (const nick of nicknames) {
     const player = await getPlayer(nick);
-    playerCache[nick] = player.games?.cs2?.faceit_elo || 0;
+    const elo = player.games?.cs2?.faceit_elo || 0;
+    playerCache[nick] = elo;
   }
 
   const command = new SlashCommandBuilder()
