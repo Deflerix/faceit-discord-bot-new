@@ -20,7 +20,6 @@ const {
   FACEIT_API_KEY,
   CHANNEL_ID,
   CHECK_INTERVAL,
-  MODE,
   FACEIT_NICKS,
   GUILD_ID
 } = process.env;
@@ -38,7 +37,7 @@ if (!FACEIT_NICKS) {
 
 const nicknames = FACEIT_NICKS.split(',').map(n => n.trim());
 let checkedMatches = new Set();
-let playerCache = {};
+let playerCache = {}; // previousElo
 
 // ================= HELPERS =================
 const saveMatches = () => fs.writeFileSync('matches.json', JSON.stringify([...checkedMatches]));
@@ -90,14 +89,11 @@ async function processMatch(nick, forceSend = false, interaction = null) {
   try {
     console.log(`\n[CHECK ${new Date().toLocaleTimeString()}] ${nick}`);
 
-    const player = await getPlayer(nick); // aktualne ELO
-    const lastMatch = await getLastMatch(player.player_id);
+    const playerData = await getPlayer(nick); // pobieramy currentElo
+    const lastMatch = await getLastMatch(playerData.player_id);
     if (!lastMatch) return;
 
-    if (checkedMatches.has(lastMatch.match_id) && !forceSend) {
-      console.log(`[INFO] Mecz ${lastMatch.match_id} już był wysłany.`);
-      return;
-    }
+    if (checkedMatches.has(lastMatch.match_id) && !forceSend) return;
 
     const stats = await getMatchStats(lastMatch.match_id);
     if (!stats.rounds || !stats.rounds[0]) return;
@@ -109,16 +105,11 @@ async function processMatch(nick, forceSend = false, interaction = null) {
     // ============ ELO LOGIC ============
     const trackedNicks = ["Deflerix", "W4KKY", "pawik100737"];
     let eloLines = trackedNicks.map(n => {
-      const p = round.teams.flatMap(t => t.players).find(pl => pl.nickname === n);
-      const currentElo = p ? p.games?.cs2?.faceit_elo || 0 : 0;
+      const currentElo = playerData.nickname === n ? playerData.games?.cs2?.faceit_elo || 0 : playerCache[n] || 0;
       const previousElo = playerCache[n] != null ? playerCache[n] : "X";
+      playerCache[n] = currentElo; // zapis aktualnego ELO
       return `-${n} ${previousElo} → ${currentElo}`;
     }).join("\n");
-
-    trackedNicks.forEach(n => {
-      const p = round.teams.flatMap(t => t.players).find(pl => pl.nickname === n);
-      if (p) playerCache[n] = p.games?.cs2?.faceit_elo || 0;
-    });
 
     // Drużyna gracza
     const ourTeam = round.teams.find(t => t.players.some(p => p.nickname.toLowerCase() === nick.toLowerCase()));
@@ -155,7 +146,6 @@ ${enemyTeamStats}`;
       saveMatches();
     }
 
-    console.log(`[SUCCESS] Wysłano mecz ${lastMatch.match_id}`);
   } catch (err) {
     console.error("[ERROR] Błąd podczas przetwarzania meczu:", err.response?.data || err.message);
   }
@@ -173,7 +163,6 @@ client.once('ready', async () => {
   console.log(`Zalogowano jako ${client.user.tag}`);
   loadMatches();
 
-  // Komenda /checkmatch
   const commandCheck = new SlashCommandBuilder()
     .setName('checkmatch')
     .setDescription('Sprawdza ostatni mecz gracza')
@@ -183,7 +172,6 @@ client.once('ready', async () => {
         .setRequired(true)
     );
 
-  // Komenda /zmecz_zweiha
   const commandZmecz = new SlashCommandBuilder()
     .setName('zmecz_zweiha')
     .setDescription('Pinguje użytkownika, że zmeczył Zweiha 🍆');
