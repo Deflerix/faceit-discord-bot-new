@@ -38,8 +38,9 @@ if (!FACEIT_NICKS) {
 
 const nicknames = FACEIT_NICKS.split(',').map(n => n.trim());
 let checkedMatches = new Set();
-let playerCache = {};
+let playerCache = {}; // { nick: previousElo }
 
+// ================= UTILS =================
 const saveMatches = () => {
   fs.writeFileSync('matches.json', JSON.stringify([...checkedMatches]));
 };
@@ -87,6 +88,7 @@ function formatPlayerStats(players) {
   }).join("\n");
 }
 
+// ================= PROCESS MATCH =================
 async function processMatch(nick, forceSend = false, interaction = null) {
   try {
     console.log(`\n[CHECK ${new Date().toLocaleTimeString()}] ${nick}`);
@@ -114,9 +116,11 @@ async function processMatch(nick, forceSend = false, interaction = null) {
       if (!p) return `-${n}: brak danych`;
 
       const currentElo = p.games?.cs2?.faceit_elo || 0;
-      const previousElo = playerCache[n] != null ? playerCache[n] : currentElo;
 
-      // zapisz aktualne ELO w cache
+      // jeśli nie ma poprzedniego ELO, pokaż "X"
+      const previousElo = playerCache[n] != null ? playerCache[n] : "X";
+
+      // zapis aktualnego ELO do cache
       playerCache[n] = currentElo;
 
       return `-${n} ${previousElo} → ${currentElo}`;
@@ -167,6 +171,7 @@ ${enemyTeamStats}`;
   }
 }
 
+// ================= AUTO CHECK =================
 async function checkMatches() {
   for (const nick of nicknames) {
     await processMatch(nick);
