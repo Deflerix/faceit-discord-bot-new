@@ -13,15 +13,11 @@ const app = express();
 const port = process.env.PORT || 3000;
 app.get("/", (req, res) => res.send("Bot is alive!"));
 app.listen(port, () => console.log(`[KEEP-ALIVE] Server running on port ${port}`));
+// =============================================
 
-// ================= ENV DEBUG =================
-console.log("=== ENV DEBUG START ===");
-console.log("CHANNEL_ID:", process.env.CHANNEL_ID);
-console.log("GUILD_ID:", process.env.GUILD_ID);
-console.log("FACEIT_NICKS:", process.env.FACEIT_NICKS);
-console.log("========================");
-
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds]
+});
 
 const {
   DISCORD_TOKEN,
@@ -33,6 +29,12 @@ const {
   GUILD_ID
 } = process.env;
 
+console.log("=== ENV DEBUG START ===");
+console.log("CHANNEL_ID:", CHANNEL_ID);
+console.log("GUILD_ID:", GUILD_ID);
+console.log("FACEIT_NICKS:", FACEIT_NICKS);
+console.log("========================");
+
 if (!FACEIT_NICKS) {
   console.error("❌ FACEIT_NICKS nie jest ustawione w ENV");
   process.exit(1);
@@ -42,15 +44,21 @@ const nicknames = FACEIT_NICKS.split(',').map(n => n.trim());
 let checkedMatches = new Set();
 let playerCache = {};
 
-const saveMatches = () => fs.writeFileSync('matches.json', JSON.stringify([...checkedMatches]));
-const loadMatches = () => {
-  if (fs.existsSync('matches.json')) checkedMatches = new Set(JSON.parse(fs.readFileSync('matches.json')));
+const saveMatches = () => {
+  fs.writeFileSync('matches.json', JSON.stringify([...checkedMatches]));
 };
 
-// ================== FACEIT API =================
+const loadMatches = () => {
+  if (fs.existsSync('matches.json')) {
+    checkedMatches = new Set(JSON.parse(fs.readFileSync('matches.json')));
+  }
+};
+
 async function getPlayer(nick) {
-  const res = await axios.get(`https://open.faceit.com/data/v4/players?nickname=${nick}`, 
-    { headers: { Authorization: `Bearer ${FACEIT_API_KEY}` } });
+  const res = await axios.get(
+    `https://open.faceit.com/data/v4/players?nickname=${nick}`,
+    { headers: { Authorization: `Bearer ${FACEIT_API_KEY}` } }
+  );
   return res.data;
 }
 
@@ -75,24 +83,27 @@ function getMention(nick) {
   return id ? `<@${id}>` : nick;
 }
 
-function formatDate(timestamp) {
-  const d = timestamp ? new Date(timestamp*1000) : new Date();
-  const day = String(d.getDate()).padStart(2,'0');
-  const month = String(d.getMonth()+1).padStart(2,'0');
-  const year = d.getFullYear();
-  const hours = String(d.getHours()).padStart(2,'0');
-  const minutes = String(d.getMinutes()).padStart(2,'0');
-  return `${day}/${month}/${year} ${hours}:${minutes}`;
+function formatPlayerStats(players) {
+  return players.map(p => {
+    const s = p.player_stats || {};
+    const kdRatio = Number(s["K/D Ratio"]) || 0;
+    const adr = s["Average Damage per Round"] != null ? Number(s["Average Damage per Round"]).toFixed(2) : "-";
+    return `\`${p.nickname.padEnd(12)} | K/D: ${String(s.Kills||0).padStart(2,'0')}/${String(s.Deaths||0).padStart(2,'0')} | K/Dśr: ${kdRatio.toFixed(2)} | ADR: ${adr} | HS%: ${String(s["Headshots %"]||"-")}\``;
+  }).join("\n");
 }
 
-// ================== PROCESS MATCH =================
 async function processMatch(nick, forceSend = false, interaction = null) {
   try {
+    console.log(`\n[CHECK ${new Date().toLocaleTimeString()}] ${nick}`);
+
     const player = await getPlayer(nick);
     const lastMatch = await getLastMatch(player.player_id);
     if (!lastMatch) return;
 
-    if (checkedMatches.has(lastMatch.match_id) && !forceSend) return;
+    if (checkedMatches.has(lastMatch.match_id) && !forceSend) {
+      console.log(`[INFO] Mecz ${lastMatch.match_id} już był wysłany.`);
+      return;
+    }
 
     const stats = await getMatchStats(lastMatch.match_id);
     if (!stats.rounds || !stats.rounds[0]) return;
@@ -101,37 +112,29 @@ async function processMatch(nick, forceSend = false, interaction = null) {
     const map = round.round_stats.Map;
     const score = round.round_stats.Score;
 
-    const team = round.teams.find(t =>
-      t.players.some(p => p.nickname.toLowerCase() === nick.toLowerCase())
-    );
-    if (!team) return;
-
-    const enemyTeam = round.teams.find(t => t !== team);
-
-    // Śledzeni gracze
+    // aktualne elo
     const trackedNicks = ["Deflerix", "W4KKY", "pawik100737"];
-    let eloLines = [];
-    for (const n of trackedNicks) {
-      const pData = await getPlayer(n);
-      const cur = pData.games.cs2.faceit_elo || 0;
-      const old = playerCache[n] || cur;
-      playerCache[n] = cur;
-      eloLines.push(`-${n} ${old} → ${cur}`);
-    }
-    eloLines = eloLines.join("\n");
+    let eloLines = trackedNicks.map(n => {
+      const p = round.teams.flatMap(t => t.players).find(pl => pl.nickname === n);
+      if (!p) return `-${n}: brak danych`;
+      const old = playerCache[n] || p.games?.cs2?.faceit_elo || 0;
+      const cur = p.games?.cs2?.faceit_elo || 0;
+      playerCache[n] = cur; // zapisz aktualne na przyszłość
+      return `-${n} ${old} → ${cur}`;
+    }).join("\n");
 
-    const eventTime = formatDate(lastMatch.finished_at || lastMatch.started_at || Date.now());
-    const mentions = trackedNicks.map(n => getMention(n)).join(' ');
+    // Drużyna naszego gracza
+    const ourTeam = round.teams.find(t => t.players.some(p => p.nickname.toLowerCase() === nick.toLowerCase()));
+    const enemyTeam = round.teams.find(t => t !== ourTeam);
 
-    function formatPlayerStats(players) {
-      return players.map(p => {
-        const s = p.player_stats || {};
-        const kdRatio = s["K/D Ratio"] || 0;
-        const kdEmoji = kdRatio >= 1 ? "🟢" : "🔴";
-        const adr = s["Average Damage per Round"] != null ? s["Average Damage per Round"].toFixed(2) : "-";
-        return `\`${p.nickname.padEnd(12)} | K/D: ${String(s.Kills||0).padStart(2,'0')}/${String(s.Deaths||0).padStart(2,'0')} | K/Dśr: ${kdRatio.toFixed(2).padEnd(4)} | ADR: ${adr.padEnd(5)} | HS%: ${String(s["Headshots %"]||"-").padEnd(3)} ${kdEmoji}\``;
-      }).join("\n");
-    }
+    const ourTeamStats = formatPlayerStats(ourTeam.players);
+    const enemyTeamStats = enemyTeam ? formatPlayerStats(enemyTeam.players) : "Brak przeciwników";
+
+    // Czas wydarzenia
+    const eventTimeRaw = lastMatch.finished_at || lastMatch.started_at || Date.now();
+    const eventTime = new Date(eventTimeRaw * 1000).toLocaleString('pl-PL', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
+
+    const mentions = trackedNicks.map(getMention).join(' ');
 
     const message = `📊 Raport z Faceit ${mentions}
 📅 Data wydarzenia: ${eventTime}
@@ -140,17 +143,20 @@ async function processMatch(nick, forceSend = false, interaction = null) {
 📈 Zmiana ELO:
 ${eloLines}
 
-**OUR TEAM**
-${formatPlayerStats(team.players)}
+📋 Statystyki graczy - OUR TEAM:
+${ourTeamStats}
 
-**ENEMY TEAM**
-${formatPlayerStats(enemyTeam.players)}`;
+📋 Statystyki graczy - ENEMY TEAM:
+${enemyTeamStats}`;
 
     if (interaction) {
       await interaction.reply({ content: message });
     } else {
       const channel = await client.channels.fetch(CHANNEL_ID);
-      if (!channel) return;
+      if (!channel) {
+        console.log(`[ERROR] Nie znaleziono kanału o ID ${CHANNEL_ID}`);
+        return;
+      }
       await channel.send({ content: message });
       checkedMatches.add(lastMatch.match_id);
       saveMatches();
@@ -163,9 +169,10 @@ ${formatPlayerStats(enemyTeam.players)}`;
   }
 }
 
-// ================= AUTO CHECK =================
 async function checkMatches() {
-  for (const nick of nicknames) await processMatch(nick);
+  for (const nick of nicknames) {
+    await processMatch(nick);
+  }
 }
 
 // ================= READY =================
@@ -176,13 +183,21 @@ client.once('ready', async () => {
   const command = new SlashCommandBuilder()
     .setName('checkmatch')
     .setDescription('Sprawdza ostatni mecz gracza')
-    .addStringOption(option => option.setName('nick').setDescription('Nick FACEIT').setRequired(true));
+    .addStringOption(option =>
+      option.setName('nick')
+        .setDescription('Nick FACEIT')
+        .setRequired(true)
+    );
 
-  if (GUILD_ID) await client.application.commands.create(command, GUILD_ID);
-  else await client.application.commands.create(command);
+  if (GUILD_ID) {
+    await client.application.commands.create(command, GUILD_ID);
+  } else {
+    await client.application.commands.create(command);
+  }
 
+  const interval = Number(CHECK_INTERVAL) || 180000;
   await checkMatches();
-  setInterval(checkMatches, Number(CHECK_INTERVAL)||180000);
+  setInterval(checkMatches, interval);
 });
 
 client.on('interactionCreate', async interaction => {
