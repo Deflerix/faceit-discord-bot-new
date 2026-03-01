@@ -16,6 +16,14 @@ app.get("/", (req, res) => res.send("Bot is alive!"));
 app.listen(port, () => console.log(`[KEEP-ALIVE] Server running on port ${port}`));
 // =============================================
 
+// ================= ENV DEBUG =================
+console.log("=== ENV DEBUG START ===");
+console.log("CHANNEL_ID:", process.env.CHANNEL_ID);
+console.log("GUILD_ID:", process.env.GUILD_ID);
+console.log("FACEIT_NICKS:", process.env.FACEIT_NICKS);
+console.log("========================");
+// =============================================
+
 const client = new Client({
   intents: [GatewayIntentBits.Guilds]
 });
@@ -29,12 +37,6 @@ const {
   FACEIT_NICKS,
   GUILD_ID
 } = process.env;
-
-console.log("=== ENV DEBUG ===");
-console.log("CHANNEL_ID:", CHANNEL_ID);
-console.log("GUILD_ID:", GUILD_ID);
-console.log("FACEIT_NICKS:", FACEIT_NICKS);
-console.log("=================");
 
 if (!FACEIT_NICKS) {
   console.error("❌ FACEIT_NICKS nie jest ustawione w ENV");
@@ -158,6 +160,10 @@ async function processMatch(nick, forceSend = false, interaction = null) {
       await interaction.reply({ embeds: [embed] });
     } else {
       const channel = await client.channels.fetch(CHANNEL_ID);
+      if (!channel) {
+        console.error("[ERROR] CHANNEL_ID nie jest poprawny lub bot nie ma dostępu do kanału");
+        return;
+      }
       await channel.send({
         content: getMention(nick),
         embeds: [embed]
@@ -207,8 +213,8 @@ client.once('ready', async () => {
   const interval = Number(CHECK_INTERVAL) || 180000;
   console.log(`[INFO] Interval ustawiony na ${interval} ms`);
 
-  setInterval(checkMatches, interval);
   await checkMatches(); // natychmiastowe sprawdzenie po starcie
+  setInterval(checkMatches, interval); // cykliczne sprawdzanie
 });
 // =============================================
 
