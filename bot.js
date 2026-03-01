@@ -20,6 +20,7 @@ const {
   FACEIT_API_KEY,
   CHANNEL_ID,
   CHECK_INTERVAL,
+  MODE,
   FACEIT_NICKS,
   GUILD_ID
 } = process.env;
@@ -37,12 +38,10 @@ if (!FACEIT_NICKS) {
 
 const nicknames = FACEIT_NICKS.split(',').map(n => n.trim());
 let checkedMatches = new Set();
-let playerCache = {}; // zapisuje currentElo dla przyszłych porównań
+let playerCache = {};
 
-const saveMatches = () => {
-  fs.writeFileSync('matches.json', JSON.stringify([...checkedMatches]));
-};
-
+// ================= HELPERS =================
+const saveMatches = () => fs.writeFileSync('matches.json', JSON.stringify([...checkedMatches]));
 const loadMatches = () => {
   if (fs.existsSync('matches.json')) {
     checkedMatches = new Set(JSON.parse(fs.readFileSync('matches.json')));
@@ -86,11 +85,12 @@ function formatPlayerStats(players) {
   }).join("\n");
 }
 
+// ================= PROCESS MATCH =================
 async function processMatch(nick, forceSend = false, interaction = null) {
   try {
     console.log(`\n[CHECK ${new Date().toLocaleTimeString()}] ${nick}`);
 
-    const player = await getPlayer(nick);
+    const player = await getPlayer(nick); // aktualne ELO
     const lastMatch = await getLastMatch(player.player_id);
     if (!lastMatch) return;
 
@@ -106,25 +106,27 @@ async function processMatch(nick, forceSend = false, interaction = null) {
     const map = round.round_stats.Map;
     const score = round.round_stats.Score;
 
-    // ELO: previous = X jeśli nie było, current z API
+    // ============ ELO LOGIC ============
     const trackedNicks = ["Deflerix", "W4KKY", "pawik100737"];
     let eloLines = trackedNicks.map(n => {
       const p = round.teams.flatMap(t => t.players).find(pl => pl.nickname === n);
-      if (!p) return `-${n}: brak danych`;
-      const current = p.games?.cs2?.faceit_elo || 0;
-      const previous = playerCache[n] != null ? playerCache[n] : "X";
-      playerCache[n] = current; // zapisz na przyszłość
-      return `-${n} ${previous} → ${current}`;
+      const currentElo = p ? p.games?.cs2?.faceit_elo || 0 : 0;
+      const previousElo = playerCache[n] != null ? playerCache[n] : "X";
+      return `-${n} ${previousElo} → ${currentElo}`;
     }).join("\n");
 
-    // Drużyna naszego gracza
+    trackedNicks.forEach(n => {
+      const p = round.teams.flatMap(t => t.players).find(pl => pl.nickname === n);
+      if (p) playerCache[n] = p.games?.cs2?.faceit_elo || 0;
+    });
+
+    // Drużyna gracza
     const ourTeam = round.teams.find(t => t.players.some(p => p.nickname.toLowerCase() === nick.toLowerCase()));
     const enemyTeam = round.teams.find(t => t !== ourTeam);
 
     const ourTeamStats = formatPlayerStats(ourTeam.players);
     const enemyTeamStats = enemyTeam ? formatPlayerStats(enemyTeam.players) : "Brak przeciwników";
 
-    // Czas wydarzenia
     const eventTimeRaw = lastMatch.finished_at || lastMatch.started_at || Date.now();
     const eventTime = new Date(eventTimeRaw * 1000).toLocaleString('pl-PL', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
 
@@ -147,17 +149,13 @@ ${enemyTeamStats}`;
       await interaction.reply({ content: message });
     } else {
       const channel = await client.channels.fetch(CHANNEL_ID);
-      if (!channel) {
-        console.log(`[ERROR] Nie znaleziono kanału o ID ${CHANNEL_ID}`);
-        return;
-      }
+      if (!channel) return;
       await channel.send({ content: message });
       checkedMatches.add(lastMatch.match_id);
       saveMatches();
     }
 
     console.log(`[SUCCESS] Wysłano mecz ${lastMatch.match_id}`);
-
   } catch (err) {
     console.error("[ERROR] Błąd podczas przetwarzania meczu:", err.response?.data || err.message);
   }
@@ -176,7 +174,7 @@ client.once('ready', async () => {
   loadMatches();
 
   // Komenda /checkmatch
-  const checkMatchCommand = new SlashCommandBuilder()
+  const commandCheck = new SlashCommandBuilder()
     .setName('checkmatch')
     .setDescription('Sprawdza ostatni mecz gracza')
     .addStringOption(option =>
@@ -185,17 +183,17 @@ client.once('ready', async () => {
         .setRequired(true)
     );
 
-  // Komenda /zmeczZweiha
-  const zmeczZweihaCommand = new SlashCommandBuilder()
+  // Komenda /zmecz_zweiha
+  const commandZmecz = new SlashCommandBuilder()
     .setName('zmecz_zweiha')
-    .setDescription('Pinguje osobę i mówi, że zmęczyła Zweiha 🍆🤬');
+    .setDescription('Pinguje użytkownika, że zmeczył Zweiha 🍆');
 
   if (GUILD_ID) {
-    await client.application.commands.create(checkMatchCommand, GUILD_ID);
-    await client.application.commands.create(zmeczZweihaCommand, GUILD_ID);
+    await client.application.commands.create(commandCheck, GUILD_ID);
+    await client.application.commands.create(commandZmecz, GUILD_ID);
   } else {
-    await client.application.commands.create(checkMatchCommand);
-    await client.application.commands.create(zmeczZweihaCommand);
+    await client.application.commands.create(commandCheck);
+    await client.application.commands.create(commandZmecz);
   }
 
   const interval = Number(CHECK_INTERVAL) || 180000;
@@ -211,9 +209,9 @@ client.on('interactionCreate', async interaction => {
     await processMatch(nick, true, interaction);
   }
 
-if (interaction.commandName === 'zmecz_zweiha') {
+  if (interaction.commandName === 'zmecz_zweiha') {
     const userMention = `<@${interaction.user.id}>`;
-    await interaction.reply(`${userMention} zmeczył Zweiha🍆 🤬`);
+    await interaction.reply({ content: `${userMention} zmeczył Zweiha 🍆 🤬` });
   }
 });
 
