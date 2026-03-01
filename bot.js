@@ -11,9 +11,7 @@ app.get("/", (req, res) => res.send("Bot is alive!"));
 app.listen(port, () => console.log(`[KEEP-ALIVE] Server running on port ${port}`));
 // =============================================
 
-const client = new Client({
-  intents: [GatewayIntentBits.Guilds]
-});
+const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
 const {
   DISCORD_TOKEN,
@@ -83,8 +81,7 @@ function formatPlayerStats(players) {
   return players.map(p => {
     const s = p.player_stats || {};
     const kdRatio = Number(s["K/D Ratio"]) || 0;
-    const adr = s["Average Damage per Round"] != null ? Number(s["Average Damage per Round"]).toFixed(2) : "-";
-    return `\`${p.nickname.padEnd(12)} | K/D: ${String(s.Kills||0).padStart(2,'0')}/${String(s.Deaths||0).padStart(2,'0')} | K/Dśr: ${kdRatio.toFixed(2)} | ADR: ${adr} | HS%: ${String(s["Headshots %"]||"-")}\``;
+    return `\`${p.nickname.padEnd(12)} | K/D: ${String(s.Kills||0).padStart(2,'0')}/${String(s.Deaths||0).padStart(2,'0')} | K/Dśr: ${kdRatio.toFixed(2)} | HS%: ${String(s["Headshots %"]||"-")}\``;
   }).join("\n");
 }
 
@@ -108,17 +105,17 @@ async function processMatch(nick, forceSend = false, interaction = null) {
     const map = round.round_stats.Map;
     const score = round.round_stats.Score;
 
-    // ==================== Poprawione ELO ====================
+    // ==================== SYSTEM ELO ====================
     const trackedNicks = ["Deflerix", "W4KKY", "pawik100737"];
     let eloLines = trackedNicks.map(n => {
       const p = round.teams.flatMap(t => t.players).find(pl => pl.nickname === n);
       if (!p) return `-${n}: brak danych`;
       const old = playerCache[n] || p.games?.cs2?.faceit_elo || 0;
       const cur = p.games?.cs2?.faceit_elo || old;
-      playerCache[n] = cur; // zapisz aktualne na przyszłość
+      playerCache[n] = cur; // zapisz aktualne elo do użycia jako "stare" w przyszłości
       return `-${n} ${old} → ${cur}`;
     }).join("\n");
-    // =========================================================
+    // ======================================================
 
     const ourTeam = round.teams.find(t => t.players.some(p => p.nickname.toLowerCase() === nick.toLowerCase()));
     const enemyTeam = round.teams.find(t => t !== ourTeam);
@@ -178,10 +175,10 @@ client.once('ready', async () => {
   const command = new SlashCommandBuilder()
     .setName('checkmatch')
     .setDescription('Sprawdza ostatni mecz gracza')
-    .addStringOption(option =>
-      option.setName('nick')
-        .setDescription('Nick FACEIT')
-        .setRequired(true)
+    .addStringOption(option => option
+      .setName('nick')
+      .setDescription('Nick FACEIT')
+      .setRequired(true)
     );
 
   if (GUILD_ID) {
