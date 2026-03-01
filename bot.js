@@ -1,14 +1,20 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
+const { 
+  Client, 
+  GatewayIntentBits, 
+  EmbedBuilder, 
+  SlashCommandBuilder 
+} = require('discord.js');
 const axios = require('axios');
 const fs = require('fs');
-const express = require("express"); // <- dodane keep-alive
+const express = require("express");
 
-// ===== Express keep-alive =====
+// ================= KEEP ALIVE =================
 const app = express();
 const port = process.env.PORT || 3000;
 app.get("/", (req, res) => res.send("Bot is alive!"));
-app.listen(port, () => console.log(`Keep-alive server running on port ${port}`));
+app.listen(port, () => console.log(`[KEEP-ALIVE] Server running on port ${port}`));
+// =============================================
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds]
@@ -20,7 +26,8 @@ const {
   CHANNEL_ID,
   CHECK_INTERVAL,
   MODE,
-  FACEIT_NICKS
+  FACEIT_NICKS,
+  CLIENT_ID
 } = process.env;
 
 const nicknames = FACEIT_NICKS.split(',').map(n => n.trim());
@@ -38,6 +45,7 @@ const loadMatches = () => {
 };
 
 async function getPlayer(nick) {
+  console.log(`[DEBUG] Pobieram dane gracza: ${nick}`);
   const res = await axios.get(
     `https://open.faceit.com/data/v4/players?nickname=${nick}`,
     { headers: { Authorization: `Bearer ${FACEIT_API_KEY}` } }
@@ -46,6 +54,7 @@ async function getPlayer(nick) {
 }
 
 async function getLastMatch(playerId) {
+  console.log(`[DEBUG] Pobieram ostatni mecz dla playerId: ${playerId}`);
   const res = await axios.get(
     `https://open.faceit.com/data/v4/players/${playerId}/history?game=cs2&limit=1`,
     { headers: { Authorization: `Bearer ${FACEIT_API_KEY}` } }
@@ -54,6 +63,7 @@ async function getLastMatch(playerId) {
 }
 
 async function getMatchStats(matchId) {
+  console.log(`[DEBUG] Pobieram statystyki meczu: ${matchId}`);
   const res = await axios.get(
     `https://open.faceit.com/data/v4/matches/${matchId}/stats`,
     { headers: { Authorization: `Bearer ${FACEIT_API_KEY}` } }
@@ -76,75 +86,120 @@ HS%: ${s["Headshots %"]}`;
   }).join('\n\n');
 }
 
-async function checkMatches() {
+function buildEmbed(nick, map, score, oldElo, currentElo, eloChange, players) {
+  return new EmbedBuilder()
+    .setTitle(`Nowy mecz FACEIT (CS2) - ${nick}`)
+    .addFields(
+      { name: "Mapa", value: map, inline: true },
+      { name: "Wynik", value: score, inline: true },
+      { name: "ELO", value: `${oldElo} → ${currentElo} (${eloChange >= 0 ? "+" : ""}${eloChange})` }
+    )
+    .setDescription(formatPlayers(players))
+    .setTimestamp()
+    .setColor(eloChange >= 0 ? 0x2ecc71 : 0xe74c3c);
+}
+
+async function processMatch(nick, forceSend = false, interaction = null) {
   try {
-    for (const nick of nicknames) {
-      const player = await getPlayer(nick);
-      const lastMatch = await getLastMatch(player.player_id);
-      if (!lastMatch) continue;
+    console.log(`\n[CHECK] Sprawdzam mecze dla: ${nick}`);
 
-      if (checkedMatches.has(lastMatch.match_id)) continue;
+    const player = await getPlayer(nick);
+    const lastMatch = await getLastMatch(player.player_id);
+    if (!lastMatch) {
+      console.log(`[INFO] Brak meczów dla ${nick}`);
+      return;
+    }
 
-      const stats = await getMatchStats(lastMatch.match_id);
-      if (!stats.rounds || !stats.rounds[0]) continue;
+    if (checkedMatches.has(lastMatch.match_id) && !forceSend) {
+      console.log(`[INFO] Mecz ${lastMatch.match_id} już był wysłany.`);
+      return;
+    }
 
-      const round = stats.rounds[0];
-      const map = round.round_stats.Map;
-      const score = round.round_stats.Score;
+    console.log(`[INFO] Nowy mecz wykryty: ${lastMatch.match_id}`);
 
-      const currentElo = player.games.cs2.faceit_elo;
-      const oldElo = playerCache[nick] || currentElo;
-      const eloChange = currentElo - oldElo;
+    const stats = await getMatchStats(lastMatch.match_id);
+    if (!stats.rounds || !stats.rounds[0]) return;
 
-      playerCache[nick] = currentElo;
+    const round = stats.rounds[0];
+    const map = round.round_stats.Map;
+    const score = round.round_stats.Score;
 
-      let playersToShow = [];
+    const currentElo = player.games.cs2.faceit_elo;
+    const oldElo = playerCache[nick] || currentElo;
+    const eloChange = currentElo - oldElo;
 
-      if (MODE === "ALL") {
-        playersToShow = round.teams.flatMap(t => t.players);
-      } else {
-        const team = round.teams.find(team =>
-          team.players.some(p =>
-            p.nickname.toLowerCase() === nick.toLowerCase()
-          )
-        );
-        if (!team) continue;
-        playersToShow = team.players;
-      }
+    playerCache[nick] = currentElo;
 
-      const embed = new EmbedBuilder()
-        .setTitle("Nowy mecz FACEIT (CS2)")
-        .addFields(
-          { name: "Mapa", value: map, inline: true },
-          { name: "Wynik", value: score, inline: true },
-          { name: "ELO", value: `${oldElo} → ${currentElo} (${eloChange >= 0 ? "+" : ""}${eloChange})`, inline: false }
+    let playersToShow = [];
+
+    if (MODE === "ALL") {
+      playersToShow = round.teams.flatMap(t => t.players);
+    } else {
+      const team = round.teams.find(team =>
+        team.players.some(p =>
+          p.nickname.toLowerCase() === nick.toLowerCase()
         )
-        .setDescription(formatPlayers(playersToShow))
-        .setTimestamp()
-        .setColor(eloChange >= 0 ? 0x2ecc71 : 0xe74c3c);
+      );
+      if (!team) return;
+      playersToShow = team.players;
+    }
 
+    const embed = buildEmbed(nick, map, score, oldElo, currentElo, eloChange, playersToShow);
+
+    if (interaction) {
+      await interaction.reply({ embeds: [embed] });
+    } else {
       const channel = await client.channels.fetch(CHANNEL_ID);
-
       await channel.send({
         content: getMention(nick),
         embeds: [embed]
       });
-
       checkedMatches.add(lastMatch.match_id);
       saveMatches();
-
-      console.log(`Wysłano mecz: ${lastMatch.match_id}`);
     }
 
+    console.log(`[SUCCESS] Wysłano mecz: ${lastMatch.match_id}`);
+
   } catch (err) {
-    console.error("Błąd:", err.response?.data || err.message);
+    console.error("[ERROR]", err.response?.data || err.message);
   }
 }
 
-client.once('ready', () => {
+// ================= AUTO CHECK =================
+async function checkMatches() {
+  for (const nick of nicknames) {
+    await processMatch(nick);
+  }
+}
+// =============================================
+
+// ================= SLASH COMMAND =================
+client.once('ready', async () => {
   console.log(`Zalogowano jako ${client.user.tag}`);
   loadMatches();
+
+  const command = new SlashCommandBuilder()
+    .setName('checkmatch')
+    .setDescription('Sprawdza ostatni mecz gracza')
+    .addStringOption(option =>
+      option.setName('nick')
+        .setDescription('Nick FACEIT')
+        .setRequired(true)
+    );
+
+  await client.application.commands.create(command);
+  console.log("[INFO] Komenda /checkmatch zarejestrowana");
+
   setInterval(checkMatches, Number(CHECK_INTERVAL));
+});
+
+client.on('interactionCreate', async interaction => {
+  if (!interaction.isChatInputCommand()) return;
+
+  if (interaction.commandName === 'checkmatch') {
+    const nick = interaction.options.getString('nick');
+    await processMatch(nick, true, interaction);
+  }
 });
 
 client.login(DISCORD_TOKEN);
