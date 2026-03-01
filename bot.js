@@ -30,6 +30,12 @@ const {
   GUILD_ID
 } = process.env;
 
+console.log("=== ENV DEBUG ===");
+console.log("CHANNEL_ID:", CHANNEL_ID);
+console.log("GUILD_ID:", GUILD_ID);
+console.log("FACEIT_NICKS:", FACEIT_NICKS);
+console.log("=================");
+
 if (!FACEIT_NICKS) {
   console.error("❌ FACEIT_NICKS nie jest ustawione w ENV");
   process.exit(1);
