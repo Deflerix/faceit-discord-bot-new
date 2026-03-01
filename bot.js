@@ -1,5 +1,9 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, SlashCommandBuilder } = require('discord.js');
+const { 
+  Client, 
+  GatewayIntentBits, 
+  SlashCommandBuilder 
+} = require('discord.js');
 const axios = require('axios');
 const fs = require('fs');
 const express = require("express");
@@ -11,7 +15,9 @@ app.get("/", (req, res) => res.send("Bot is alive!"));
 app.listen(port, () => console.log(`[KEEP-ALIVE] Server running on port ${port}`));
 // =============================================
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds]
+});
 
 const {
   DISCORD_TOKEN,
@@ -105,26 +111,31 @@ async function processMatch(nick, forceSend = false, interaction = null) {
     const map = round.round_stats.Map;
     const score = round.round_stats.Score;
 
-    // ==================== SYSTEM ELO ====================
+    // ===================== ELO =====================
     const trackedNicks = ["Deflerix", "W4KKY", "pawik100737"];
     let eloLines = trackedNicks.map(n => {
       const p = round.teams.flatMap(t => t.players).find(pl => pl.nickname === n);
       if (!p) return `-${n}: brak danych`;
-      const old = playerCache[n] || p.games?.cs2?.faceit_elo || 0;
-      const cur = p.games?.cs2?.faceit_elo || old;
-      playerCache[n] = cur; // zapisz aktualne elo do użycia jako "stare" w przyszłości
+      const cur = p.games?.cs2?.faceit_elo || 0;
+      const old = playerCache[n] !== undefined ? playerCache[n] : cur; // jeśli pierwszy raz, old = current
+      playerCache[n] = cur; // zapisujemy aktualne ELO do cache
       return `-${n} ${old} → ${cur}`;
     }).join("\n");
-    // ======================================================
+    // ==============================================
 
+    // Drużyna naszego gracza
     const ourTeam = round.teams.find(t => t.players.some(p => p.nickname.toLowerCase() === nick.toLowerCase()));
     const enemyTeam = round.teams.find(t => t !== ourTeam);
 
     const ourTeamStats = formatPlayerStats(ourTeam.players);
     const enemyTeamStats = enemyTeam ? formatPlayerStats(enemyTeam.players) : "Brak przeciwników";
 
+    // Czas wydarzenia
     const eventTimeRaw = lastMatch.finished_at || lastMatch.started_at || Date.now();
-    const eventTime = new Date(eventTimeRaw * 1000).toLocaleString('pl-PL', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
+    const eventTime = new Date(eventTimeRaw * 1000).toLocaleString('pl-PL', { 
+      day:'2-digit', month:'2-digit', year:'numeric', 
+      hour:'2-digit', minute:'2-digit' 
+    });
 
     const mentions = trackedNicks.map(getMention).join(' ');
 
@@ -172,13 +183,19 @@ client.once('ready', async () => {
   console.log(`Zalogowano jako ${client.user.tag}`);
   loadMatches();
 
+  // Inicjalizacja cache ELO przy starcie
+  for (const nick of nicknames) {
+    const player = await getPlayer(nick);
+    playerCache[nick] = player.games?.cs2?.faceit_elo || 0;
+  }
+
   const command = new SlashCommandBuilder()
     .setName('checkmatch')
     .setDescription('Sprawdza ostatni mecz gracza')
-    .addStringOption(option => option
-      .setName('nick')
-      .setDescription('Nick FACEIT')
-      .setRequired(true)
+    .addStringOption(option =>
+      option.setName('nick')
+        .setDescription('Nick FACEIT')
+        .setRequired(true)
     );
 
   if (GUILD_ID) {
