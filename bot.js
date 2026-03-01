@@ -27,8 +27,13 @@ const {
   CHECK_INTERVAL,
   MODE,
   FACEIT_NICKS,
-  CLIENT_ID
+  GUILD_ID
 } = process.env;
+
+if (!FACEIT_NICKS) {
+  console.error("❌ FACEIT_NICKS nie jest ustawione w ENV");
+  process.exit(1);
+}
 
 const nicknames = FACEIT_NICKS.split(',').map(n => n.trim());
 let checkedMatches = new Set();
@@ -101,21 +106,18 @@ function buildEmbed(nick, map, score, oldElo, currentElo, eloChange, players) {
 
 async function processMatch(nick, forceSend = false, interaction = null) {
   try {
-    console.log(`\n[CHECK] Sprawdzam mecze dla: ${nick}`);
+    console.log(`\n[CHECK ${new Date().toLocaleTimeString()}] ${nick}`);
 
     const player = await getPlayer(nick);
     const lastMatch = await getLastMatch(player.player_id);
-    if (!lastMatch) {
-      console.log(`[INFO] Brak meczów dla ${nick}`);
-      return;
-    }
+    if (!lastMatch) return;
 
     if (checkedMatches.has(lastMatch.match_id) && !forceSend) {
       console.log(`[INFO] Mecz ${lastMatch.match_id} już był wysłany.`);
       return;
     }
 
-    console.log(`[INFO] Nowy mecz wykryty: ${lastMatch.match_id}`);
+    console.log(`[INFO] Nowy mecz: ${lastMatch.match_id}`);
 
     const stats = await getMatchStats(lastMatch.match_id);
     if (!stats.rounds || !stats.rounds[0]) return;
@@ -158,7 +160,7 @@ async function processMatch(nick, forceSend = false, interaction = null) {
       saveMatches();
     }
 
-    console.log(`[SUCCESS] Wysłano mecz: ${lastMatch.match_id}`);
+    console.log(`[SUCCESS] Wysłano mecz ${lastMatch.match_id}`);
 
   } catch (err) {
     console.error("[ERROR]", err.response?.data || err.message);
@@ -167,13 +169,14 @@ async function processMatch(nick, forceSend = false, interaction = null) {
 
 // ================= AUTO CHECK =================
 async function checkMatches() {
+  console.log(`\n[TICK] ${new Date().toLocaleTimeString()}`);
   for (const nick of nicknames) {
     await processMatch(nick);
   }
 }
 // =============================================
 
-// ================= SLASH COMMAND =================
+// ================= READY =================
 client.once('ready', async () => {
   console.log(`Zalogowano jako ${client.user.tag}`);
   loadMatches();
@@ -187,11 +190,21 @@ client.once('ready', async () => {
         .setRequired(true)
     );
 
-  await client.application.commands.create(command);
-  console.log("[INFO] Komenda /checkmatch zarejestrowana");
+  if (GUILD_ID) {
+    await client.application.commands.create(command, GUILD_ID);
+    console.log("[INFO] Komenda /checkmatch (guild) zarejestrowana");
+  } else {
+    await client.application.commands.create(command);
+    console.log("[INFO] Komenda /checkmatch (global) zarejestrowana");
+  }
 
-  setInterval(checkMatches, Number(CHECK_INTERVAL));
+  const interval = Number(CHECK_INTERVAL) || 180000;
+  console.log(`[INFO] Interval ustawiony na ${interval} ms`);
+
+  setInterval(checkMatches, interval);
+  await checkMatches(); // natychmiastowe sprawdzenie po starcie
 });
+// =============================================
 
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
