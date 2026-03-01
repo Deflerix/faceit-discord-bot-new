@@ -158,15 +158,23 @@ async function processMatch(nick, forceSend = false, interaction = null) {
       playersToShow = team.players;
     }
 
+    // Poprawione ADR jeśli undefined
+    playersToShow = playersToShow.map(p => {
+      if (!p.player_stats["Average Damage per Round"]) {
+        p.player_stats["Average Damage per Round"] = "-";
+      }
+      return p;
+    });
+
     const embed = buildEmbed(nick, map, score, oldElo, currentElo, eloChange, playersToShow);
-    const mention = getMention(nick) || nick;
+    const mention = getMention(nick); // ping opcjonalny
 
     console.log(`[DEBUG] Wysyłam embed na kanał ${CHANNEL_ID}`);
     console.log(`[DEBUG] Mention: ${mention}`);
-    console.log(embed);
 
     if (interaction) {
-      await interaction.reply({ content: mention, embeds: [embed] });
+      // komenda slash
+      await interaction.reply({ content: mention || "", embeds: [embed] });
     } else {
       const channel = await client.channels.fetch(CHANNEL_ID);
 
@@ -175,7 +183,8 @@ async function processMatch(nick, forceSend = false, interaction = null) {
         return;
       }
 
-      await channel.send({ content: mention, embeds: [embed] });
+      // WAŻNE: content pusty string jeśli brak pingu, aby embed zawsze się wyświetlał
+      await channel.send({ content: mention ? mention + " " : "", embeds: [embed] });
       checkedMatches.add(lastMatch.match_id);
       saveMatches();
     }
