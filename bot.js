@@ -1,9 +1,5 @@
 require('dotenv').config();
-const { 
-  Client, 
-  GatewayIntentBits, 
-  SlashCommandBuilder 
-} = require('discord.js');
+const { Client, GatewayIntentBits, SlashCommandBuilder } = require('discord.js');
 const axios = require('axios');
 const fs = require('fs');
 const express = require("express");
@@ -24,7 +20,6 @@ const {
   FACEIT_API_KEY,
   CHANNEL_ID,
   CHECK_INTERVAL,
-  MODE,
   FACEIT_NICKS,
   GUILD_ID
 } = process.env;
@@ -42,7 +37,7 @@ if (!FACEIT_NICKS) {
 
 const nicknames = FACEIT_NICKS.split(',').map(n => n.trim());
 let checkedMatches = new Set();
-let playerCache = {}; // tutaj trzymamy previousElo
+let playerCache = {}; // zapisuje currentElo dla przyszłych porównań
 
 const saveMatches = () => {
   fs.writeFileSync('matches.json', JSON.stringify([...checkedMatches]));
@@ -111,25 +106,15 @@ async function processMatch(nick, forceSend = false, interaction = null) {
     const map = round.round_stats.Map;
     const score = round.round_stats.Score;
 
-    // Pobranie aktualnego ELO graczy śledzonych
+    // ELO: previous = X jeśli nie było, current z API
     const trackedNicks = ["Deflerix", "W4KKY", "pawik100737"];
-    const playerData = {};
-    for (const n of trackedNicks) {
-      try {
-        const pdata = await getPlayer(n);
-        playerData[n] = pdata.games?.cs2?.faceit_elo || 0;
-      } catch(e) {
-        console.log(`[WARN] Nie udało się pobrać ELO dla ${n}:`, e.message);
-        playerData[n] = 0;
-      }
-    }
-
-    // Tworzenie linii ELO z X jeśli brak previousElo
     let eloLines = trackedNicks.map(n => {
-      const previousElo = playerCache[n] != null ? playerCache[n] : "X";
-      const currentElo = playerData[n];
-      playerCache[n] = currentElo; // zapisz aktualne do cache
-      return `-${n} ${previousElo} → ${currentElo}`;
+      const p = round.teams.flatMap(t => t.players).find(pl => pl.nickname === n);
+      if (!p) return `-${n}: brak danych`;
+      const current = p.games?.cs2?.faceit_elo || 0;
+      const previous = playerCache[n] != null ? playerCache[n] : "X";
+      playerCache[n] = current; // zapisz na przyszłość
+      return `-${n} ${previous} → ${current}`;
     }).join("\n");
 
     // Drużyna naszego gracza
@@ -178,6 +163,7 @@ ${enemyTeamStats}`;
   }
 }
 
+// ================= AUTO CHECK =================
 async function checkMatches() {
   for (const nick of nicknames) {
     await processMatch(nick);
@@ -189,7 +175,8 @@ client.once('ready', async () => {
   console.log(`Zalogowano jako ${client.user.tag}`);
   loadMatches();
 
-  const command = new SlashCommandBuilder()
+  // Komenda /checkmatch
+  const checkMatchCommand = new SlashCommandBuilder()
     .setName('checkmatch')
     .setDescription('Sprawdza ostatni mecz gracza')
     .addStringOption(option =>
@@ -198,10 +185,17 @@ client.once('ready', async () => {
         .setRequired(true)
     );
 
+  // Komenda /zmeczZweiha
+  const zmeczZweihaCommand = new SlashCommandBuilder()
+    .setName('zmeczZweiha')
+    .setDescription('Pinguje osobę i mówi, że zmęczyła Zweiha 🍆🤬');
+
   if (GUILD_ID) {
-    await client.application.commands.create(command, GUILD_ID);
+    await client.application.commands.create(checkMatchCommand, GUILD_ID);
+    await client.application.commands.create(zmeczZweihaCommand, GUILD_ID);
   } else {
-    await client.application.commands.create(command);
+    await client.application.commands.create(checkMatchCommand);
+    await client.application.commands.create(zmeczZweihaCommand);
   }
 
   const interval = Number(CHECK_INTERVAL) || 180000;
@@ -211,9 +205,15 @@ client.once('ready', async () => {
 
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
+
   if (interaction.commandName === 'checkmatch') {
     const nick = interaction.options.getString('nick');
     await processMatch(nick, true, interaction);
+  }
+
+  if (interaction.commandName === 'zmeczZweiha') {
+    const userMention = `<@${interaction.user.id}>`;
+    await interaction.reply(`${userMention} zmeczył Zweiha🍆 🤬`);
   }
 });
 
