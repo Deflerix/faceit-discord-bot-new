@@ -211,7 +211,7 @@ client.on('interactionCreate', async interaction => {
     await processMatch(nick, true, interaction);
   }
 
-  if (interaction.commandName === 'zmeczZweiha') {
+if (interaction.commandName === 'zmecz_zweiha') {
     const userMention = `<@${interaction.user.id}>`;
     await interaction.reply(`${userMention} zmeczył Zweiha🍆 🤬`);
   }
