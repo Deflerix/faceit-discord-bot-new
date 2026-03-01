@@ -20,26 +20,20 @@ const {
   FACEIT_API_KEY,
   CHANNEL_ID,
   CHECK_INTERVAL,
-  MODE,
   FACEIT_NICKS,
   GUILD_ID
 } = process.env;
 
-console.log("=== ENV DEBUG START ===");
-console.log("CHANNEL_ID:", CHANNEL_ID);
-console.log("GUILD_ID:", GUILD_ID);
-console.log("FACEIT_NICKS:", FACEIT_NICKS);
-console.log("========================");
-
 if (!FACEIT_NICKS) {
-  console.error("❌ FACEIT_NICKS nie jest ustawione w ENV");
+  console.error("FACEIT_NICKS nie jest ustawione w ENV");
   process.exit(1);
 }
 
 const nicknames = FACEIT_NICKS.split(',').map(n => n.trim());
 let checkedMatches = new Set();
-let playerCache = {}; // poprzednie ELO graczy
+let playerCache = {}; // przechowuje poprzednie ELO
 
+// ================= FILE CACHE =================
 const saveMatches = () => {
   fs.writeFileSync('matches.json', JSON.stringify([...checkedMatches]));
 };
@@ -50,6 +44,7 @@ const loadMatches = () => {
   }
 };
 
+// ================= FACEIT API =================
 async function getPlayer(nick) {
   const res = await axios.get(
     `https://open.faceit.com/data/v4/players?nickname=${nick}`,
@@ -87,18 +82,14 @@ function formatPlayerStats(players) {
   }).join("\n");
 }
 
+// ================= MATCH LOGIC =================
 async function processMatch(nick, forceSend = false, interaction = null) {
   try {
-    console.log(`\n[CHECK ${new Date().toLocaleTimeString()}] ${nick}`);
-
     const player = await getPlayer(nick);
     const lastMatch = await getLastMatch(player.player_id);
     if (!lastMatch) return;
 
-    if (checkedMatches.has(lastMatch.match_id) && !forceSend) {
-      console.log(`[INFO] Mecz ${lastMatch.match_id} już był wysłany.`);
-      return;
-    }
+    if (checkedMatches.has(lastMatch.match_id) && !forceSend) return;
 
     const stats = await getMatchStats(lastMatch.match_id);
     if (!stats.rounds || !stats.rounds[0]) return;
@@ -107,33 +98,36 @@ async function processMatch(nick, forceSend = false, interaction = null) {
     const map = round.round_stats.Map;
     const score = round.round_stats.Score;
 
-    // ================== ELO ==================
-    const trackedNicks = ["Deflerix", "W4KKY", "pawik100737"];
+    // ===== ELO DLA WSZYSTKICH =====
+    const trackedNicks = nicknames;
     let eloLines = "";
+
     for (const n of trackedNicks) {
       try {
-        const playerData = await getPlayer(n); // current ELO z API
+        const playerData = await getPlayer(n);
         const currentElo = playerData.games?.cs2?.faceit_elo || 0;
         const previousElo = playerCache[n] != null ? playerCache[n] : "X";
-        playerCache[n] = currentElo; // aktualizacja cache
+
         eloLines += `-${n} ${previousElo} → ${currentElo}\n`;
-      } catch (err) {
+
+        playerCache[n] = currentElo; // aktualizacja cache
+      } catch {
         eloLines += `-${n} brak danych\n`;
       }
     }
-    // ========================================
 
-    // Drużyna naszego gracza
-    const ourTeam = round.teams.find(t => t.players.some(p => p.nickname.toLowerCase() === nick.toLowerCase()));
+    const ourTeam = round.teams.find(t =>
+      t.players.some(p => p.nickname.toLowerCase() === nick.toLowerCase())
+    );
     const enemyTeam = round.teams.find(t => t !== ourTeam);
 
     const ourTeamStats = formatPlayerStats(ourTeam.players);
     const enemyTeamStats = enemyTeam ? formatPlayerStats(enemyTeam.players) : "Brak przeciwników";
 
-    // Czas wydarzenia
     const eventTimeRaw = lastMatch.finished_at || lastMatch.started_at || Date.now();
     const eventTime = new Date(eventTimeRaw * 1000).toLocaleString('pl-PL', {
-      day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit'
+      day:'2-digit', month:'2-digit', year:'numeric',
+      hour:'2-digit', minute:'2-digit'
     });
 
     const mentions = trackedNicks.map(getMention).join(' ');
@@ -155,22 +149,18 @@ ${enemyTeamStats}`;
       await interaction.reply({ content: message });
     } else {
       const channel = await client.channels.fetch(CHANNEL_ID);
-      if (!channel) {
-        console.log(`[ERROR] Nie znaleziono kanału o ID ${CHANNEL_ID}`);
-        return;
-      }
+      if (!channel) return;
       await channel.send({ content: message });
       checkedMatches.add(lastMatch.match_id);
       saveMatches();
     }
 
-    console.log(`[SUCCESS] Wysłano mecz ${lastMatch.match_id}`);
-
   } catch (err) {
-    console.error("[ERROR] Błąd podczas przetwarzania meczu:", err.response?.data || err.message);
+    console.error("Błąd:", err.response?.data || err.message);
   }
 }
 
+// ================= AUTO CHECK =================
 async function checkMatches() {
   for (const nick of nicknames) {
     await processMatch(nick);
@@ -182,7 +172,7 @@ client.once('ready', async () => {
   console.log(`Zalogowano jako ${client.user.tag}`);
   loadMatches();
 
-  const command = new SlashCommandBuilder()
+  const commandCheck = new SlashCommandBuilder()
     .setName('checkmatch')
     .setDescription('Sprawdza ostatni mecz gracza')
     .addStringOption(option =>
@@ -191,10 +181,16 @@ client.once('ready', async () => {
         .setRequired(true)
     );
 
+  const commandZmecz = new SlashCommandBuilder()
+    .setName('zmecz_zweiha')
+    .setDescription('Oznacza, że ktoś zmeczył Zweiha 🍆');
+
   if (GUILD_ID) {
-    await client.application.commands.create(command, GUILD_ID);
+    await client.application.commands.create(commandCheck, GUILD_ID);
+    await client.application.commands.create(commandZmecz, GUILD_ID);
   } else {
-    await client.application.commands.create(command);
+    await client.application.commands.create(commandCheck);
+    await client.application.commands.create(commandZmecz);
   }
 
   const interval = Number(CHECK_INTERVAL) || 180000;
@@ -202,11 +198,20 @@ client.once('ready', async () => {
   setInterval(checkMatches, interval);
 });
 
+// ================= INTERACTIONS =================
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
+
   if (interaction.commandName === 'checkmatch') {
     const nick = interaction.options.getString('nick');
     await processMatch(nick, true, interaction);
+  }
+
+  if (interaction.commandName === 'zmecz_zweiha') {
+    const userMention = `<@${interaction.user.id}>`;
+    await interaction.reply({
+      content: `${userMention} zmeczył Zweiha 🍆 🤬`
+    });
   }
 });
 
