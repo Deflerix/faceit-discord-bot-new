@@ -106,10 +106,18 @@ async function processMatch(nick, forceSend = false, interaction = null) {
     const map = round.round_stats.Map;
     const score = round.round_stats.Score;
 
-    const currentElo = player.games.cs2.faceit_elo;
-    const oldElo = playerCache[nick] || currentElo;
-    const eloChange = currentElo - oldElo;
-    playerCache[nick] = currentElo;
+    // ==================== STARY FRAGMENT ELO ====================
+    const trackedNicks = ["Deflerix", "W4KKY", "pawik100737"];
+    let eloLines = trackedNicks.map(n => {
+      const pElo = round.teams.flatMap(t => t.players).find(pl => pl.nickname === n);
+      if (!pElo) return `-${n}: brak danych`;
+      // tu zapisujemy stare i nowe elo poprawnie
+      const old = playerCache[n] || pElo.games?.cs2?.faceit_elo || 0;
+      const cur = pElo.games?.cs2?.faceit_elo || old;
+      playerCache[n] = cur; // zapisujemy aktualne, aby kolejne raporty używały jako "stare"
+      return `-${n} ${old} → ${cur}`;
+    }).join("\n");
+    // ============================================================
 
     // wybieramy tylko drużynę gracza
     const team = round.teams.find(t =>
@@ -117,19 +125,7 @@ async function processMatch(nick, forceSend = false, interaction = null) {
     );
     if (!team) return;
 
-    // Zmiana ELO dla wybranych nicków
-    const trackedNicks = ["Deflerix", "W4KKY", "pawik100737"];
-    let eloLines = trackedNicks.map(n => {
-      const pElo = round.teams.flatMap(t => t.players).find(pl => pl.nickname === n);
-      if (!pElo) return `-${n}: brak danych`;
-      const old = playerCache[n] || pElo.games?.cs2?.faceit_elo || currentElo;
-      const cur = pElo.games?.cs2?.faceit_elo || currentElo;
-      // zapisujemy aktualne elo do playerCache jeśli jeszcze nie ma
-      if (!playerCache[n]) playerCache[n] = cur;
-      return `-${n} ${old} → ${cur}`;
-    }).join("\n");
-
-    // Statystyki graczy
+    // Statystyki graczy - ADR naprawione
     const playersResults = team.players.map(p => {
       const s = p.player_stats || {};
       const kdRatio = Number(s["K/D Ratio"]) || 0;
