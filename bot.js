@@ -1,5 +1,9 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, SlashCommandBuilder } = require('discord.js');
+const { 
+  Client, 
+  GatewayIntentBits, 
+  SlashCommandBuilder 
+} = require('discord.js');
 const axios = require('axios');
 const fs = require('fs');
 const express = require("express");
@@ -19,7 +23,9 @@ console.log("FACEIT_NICKS:", process.env.FACEIT_NICKS);
 console.log("========================");
 // =============================================
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds]
+});
 
 const {
   DISCORD_TOKEN,
@@ -40,7 +46,10 @@ const nicknames = FACEIT_NICKS.split(',').map(n => n.trim());
 let checkedMatches = new Set();
 let playerCache = {};
 
-const saveMatches = () => fs.writeFileSync('matches.json', JSON.stringify([...checkedMatches]));
+const saveMatches = () => {
+  fs.writeFileSync('matches.json', JSON.stringify([...checkedMatches]));
+};
+
 const loadMatches = () => {
   if (fs.existsSync('matches.json')) {
     checkedMatches = new Set(JSON.parse(fs.readFileSync('matches.json')));
@@ -48,17 +57,29 @@ const loadMatches = () => {
 };
 
 async function getPlayer(nick) {
-  const res = await axios.get(`https://open.faceit.com/data/v4/players?nickname=${nick}`, { headers: { Authorization: `Bearer ${FACEIT_API_KEY}` } });
+  console.log(`[DEBUG] Pobieram dane gracza: ${nick}`);
+  const res = await axios.get(
+    `https://open.faceit.com/data/v4/players?nickname=${nick}`,
+    { headers: { Authorization: `Bearer ${FACEIT_API_KEY}` } }
+  );
   return res.data;
 }
 
 async function getLastMatch(playerId) {
-  const res = await axios.get(`https://open.faceit.com/data/v4/players/${playerId}/history?game=cs2&limit=1`, { headers: { Authorization: `Bearer ${FACEIT_API_KEY}` } });
+  console.log(`[DEBUG] Pobieram ostatni mecz dla playerId: ${playerId}`);
+  const res = await axios.get(
+    `https://open.faceit.com/data/v4/players/${playerId}/history?game=cs2&limit=1`,
+    { headers: { Authorization: `Bearer ${FACEIT_API_KEY}` } }
+  );
   return res.data.items[0];
 }
 
 async function getMatchStats(matchId) {
-  const res = await axios.get(`https://open.faceit.com/data/v4/matches/${matchId}/stats`, { headers: { Authorization: `Bearer ${FACEIT_API_KEY}` } });
+  console.log(`[DEBUG] Pobieram statystyki meczu: ${matchId}`);
+  const res = await axios.get(
+    `https://open.faceit.com/data/v4/matches/${matchId}/stats`,
+    { headers: { Authorization: `Bearer ${FACEIT_API_KEY}` } }
+  );
   return res.data;
 }
 
@@ -70,6 +91,7 @@ function getMention(nick) {
 async function processMatch(nick, forceSend = false, interaction = null) {
   try {
     console.log(`\n[CHECK ${new Date().toLocaleTimeString()}] ${nick}`);
+
     const player = await getPlayer(nick);
     const lastMatch = await getLastMatch(player.player_id);
     if (!lastMatch) return;
@@ -79,41 +101,46 @@ async function processMatch(nick, forceSend = false, interaction = null) {
       return;
     }
 
+    console.log(`[INFO] Nowy mecz wykryty: ${lastMatch.match_id}`);
+
     const stats = await getMatchStats(lastMatch.match_id);
-    if (!stats.rounds?.[0]) return;
+    if (!stats.rounds || !stats.rounds[0]) return;
 
     const round = stats.rounds[0];
     const map = round.round_stats.Map;
     const score = round.round_stats.Score;
 
-    const currentElo = player.games.cs2.faceit_elo;
-    const oldElo = playerCache[nick] || currentElo;
-    playerCache[nick] = currentElo;
-
-    // drużyna gracza
-    const team = round.teams.find(t => t.players.some(p => p.nickname.toLowerCase() === nick.toLowerCase()));
+    // wybieramy tylko drużynę gracza
+    const team = round.teams.find(t =>
+      t.players.some(p => p.nickname.toLowerCase() === nick.toLowerCase())
+    );
     if (!team) return;
 
-    // Zmiana ELO dla śledzonych nicków
+    // Aktualne ELO dla śledzonych nicków
     const trackedNicks = ["Deflerix", "W4KKY", "pawik100737"];
-    const eloLines = trackedNicks.map(n => {
-      const p = round.teams.flatMap(t => t.players).find(pl => pl.nickname === n);
-      if (!p) return `-${n}: brak danych`;
-      const old = playerCache[n] || p.games?.cs2?.faceit_elo || 0;
-      const cur = p.games?.cs2?.faceit_elo || 0;
-      return `-${n} ${old} → ${cur}`;
-    }).join("\n");
+    let eloLines = [];
+    for (const n of trackedNicks) {
+      const pData = await getPlayer(n);
+      const old = playerCache[n] || pData.games.cs2.faceit_elo;
+      const cur = pData.games.cs2.faceit_elo;
+      playerCache[n] = cur;
+      eloLines.push(`-${n} ${old} → ${cur}`);
+    }
+    eloLines = eloLines.join("\n");
 
-    // Statystyki graczy drużyny
+    // Data wydarzenia
+    const eventTime = new Date(lastMatch.finished_at || lastMatch.started_at || Date.now()).toLocaleString();
+
+    // Mentions
+    const mentions = trackedNicks.map(n => getMention(n)).join(' ');
+
+    // Statystyki drużyny gracza
     const playersStats = team.players.map(p => {
       const s = p.player_stats || {};
       return `${p.nickname} ${s.Kills || 0}/${s.Deaths || 0} ${s["K/D Ratio"] || "-"} ${s["Average Damage per Round"] || "-"} ${s["Headshots %"] || "-"}`;
     }).join("\n");
 
-    const eventTime = new Date(lastMatch.finished_at || lastMatch.started_at || Date.now()).toLocaleString();
-
-    const mentions = trackedNicks.map(n => getMention(n)).join(' ');
-
+    // Kompletna wiadomość
     const message = `📊 Raport z Faceit ${mentions}
 📅 Data wydarzenia: ${eventTime}
 🎯 Wynik: ${score}
@@ -128,23 +155,32 @@ ${playersStats}`;
       await interaction.reply({ content: message });
     } else {
       const channel = await client.channels.fetch(CHANNEL_ID);
-      if (!channel) return console.log(`[ERROR] Nie znaleziono kanału o ID ${CHANNEL_ID}`);
+      if (!channel) {
+        console.log(`[ERROR] Nie znaleziono kanału o ID ${CHANNEL_ID}`);
+        return;
+      }
       await channel.send({ content: message });
       checkedMatches.add(lastMatch.match_id);
       saveMatches();
     }
 
     console.log(`[SUCCESS] Wysłano mecz ${lastMatch.match_id}`);
+
   } catch (err) {
     console.error("[ERROR] Błąd podczas przetwarzania meczu:", err.response?.data || err.message);
   }
 }
 
+// ================= AUTO CHECK =================
 async function checkMatches() {
   console.log(`\n[TICK] ${new Date().toLocaleTimeString()}`);
-  for (const nick of nicknames) await processMatch(nick);
+  for (const nick of nicknames) {
+    await processMatch(nick);
+  }
 }
+// =============================================
 
+// ================= READY =================
 client.once('ready', async () => {
   console.log(`Zalogowano jako ${client.user.tag}`);
   loadMatches();
@@ -152,7 +188,11 @@ client.once('ready', async () => {
   const command = new SlashCommandBuilder()
     .setName('checkmatch')
     .setDescription('Sprawdza ostatni mecz gracza')
-    .addStringOption(option => option.setName('nick').setDescription('Nick FACEIT').setRequired(true));
+    .addStringOption(option =>
+      option.setName('nick')
+        .setDescription('Nick FACEIT')
+        .setRequired(true)
+    );
 
   if (GUILD_ID) {
     await client.application.commands.create(command, GUILD_ID);
@@ -162,12 +202,17 @@ client.once('ready', async () => {
     console.log("[INFO] Komenda /checkmatch (global) zarejestrowana");
   }
 
+  const interval = Number(CHECK_INTERVAL) || 180000;
+  console.log(`[INFO] Interval ustawiony na ${interval} ms`);
+
   await checkMatches(); // natychmiastowe sprawdzenie po starcie
-  setInterval(checkMatches, Number(CHECK_INTERVAL) || 180000); // cykliczne sprawdzanie
+  setInterval(checkMatches, interval); // cykliczne sprawdzanie
 });
+// =============================================
 
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
+
   if (interaction.commandName === 'checkmatch') {
     const nick = interaction.options.getString('nick');
     await processMatch(nick, true, interaction);
