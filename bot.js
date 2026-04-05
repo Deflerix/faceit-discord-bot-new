@@ -13,7 +13,16 @@ app.listen(port, () => console.log(`Server running on port ${port}`));
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
-const { DISCORD_TOKEN, FACEIT_API_KEY, CHANNEL_ID, CHECK_INTERVAL, FACEIT_NICKS, GUILD_ID } = process.env;
+const {
+  DISCORD_TOKEN,
+  FACEIT_API_KEY,
+  CHANNEL_ID,
+  CHECK_INTERVAL,
+  FACEIT_NICKS,
+  GUILD_ID,
+  MUSIC_BOT_CHANNEL_ID
+} = process.env;
+const AUTO_MUSIC_COMMAND = process.env.AUTO_MUSIC_COMMAND || '/play freed from desire';
 const nicknames = (FACEIT_NICKS || '').split(',').map(n => n.trim()).filter(Boolean);
 
 let checkedMatches = new Set();
@@ -200,6 +209,13 @@ async function processMatch(forceSend = false) {
       if (image) {
         await channel.send({ files: [image] });
       }
+
+      if (MUSIC_BOT_CHANNEL_ID) {
+        const musicChannel = await client.channels.fetch(MUSIC_BOT_CHANNEL_ID);
+        if (musicChannel && musicChannel.isTextBased()) {
+          await musicChannel.send(AUTO_MUSIC_COMMAND);
+        }
+      }
       checkedMatches.add(matchId);
       saveMatches();
     }
@@ -253,6 +269,7 @@ client.on('interactionCreate', async interaction => {
 
     await interaction.reply({ content: message });
   }
+
 });
 
 client.login(DISCORD_TOKEN);
