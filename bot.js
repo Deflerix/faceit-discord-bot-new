@@ -24,7 +24,7 @@ app.get('/', (req, res) => res.send('Bot is alive!'));
 app.listen(port, () => console.log(`Server running on port ${port}`));
 // =============================================
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates] });
 
 const {
   DISCORD_TOKEN,
@@ -194,27 +194,28 @@ function getRandomImage(isWin) {
 
 async function playMatchSong(isWin, overrideUrl = null) {
   const songUrl = overrideUrl || getSongUrl(isWin);
-  if (!VOICE_CHANNEL_ID || !songUrl) return;
+  if (!VOICE_CHANNEL_ID || !songUrl) return false;
   debugLog(`playMatchSong(isWin=${isWin}) url=${songUrl}`);
 
-  const voiceChannel = await client.channels.fetch(VOICE_CHANNEL_ID);
-  if (!voiceChannel || !voiceChannel.isVoiceBased()) {
-    console.log('[WARN] VOICE_CHANNEL_ID nie wskazuje kanału głosowego.');
-    return;
-  }
-  const me = voiceChannel.guild.members.me;
-  const perms = voiceChannel.permissionsFor(me);
-  debugLog(`voice perms connect=${perms?.has('Connect')} speak=${perms?.has('Speak')}`);
-
-  const connection = joinVoiceChannel({
-    channelId: voiceChannel.id,
-    guildId: voiceChannel.guild.id,
-    adapterCreator: voiceChannel.guild.voiceAdapterCreator,
-    selfDeaf: false,
-    selfMute: false
-  });
-
+  let connection = null;
   try {
+    const voiceChannel = await client.channels.fetch(VOICE_CHANNEL_ID);
+    if (!voiceChannel || !voiceChannel.isVoiceBased()) {
+      console.log('[WARN] VOICE_CHANNEL_ID nie wskazuje kanału głosowego.');
+      return false;
+    }
+    const me = voiceChannel.guild.members.me;
+    const perms = voiceChannel.permissionsFor(me);
+    debugLog(`voice perms connect=${perms?.has('Connect')} speak=${perms?.has('Speak')}`);
+
+    connection = joinVoiceChannel({
+      channelId: voiceChannel.id,
+      guildId: voiceChannel.guild.id,
+      adapterCreator: voiceChannel.guild.voiceAdapterCreator,
+      selfDeaf: false,
+      selfMute: false
+    });
+
     await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
     if (voiceChannel.type === ChannelType.GuildStageVoice && me?.voice) {
       // Stage channel: bot może być domyślnie "suppressed", więc nic nie słychać.
@@ -291,9 +292,13 @@ async function playMatchSong(isWin, overrideUrl = null) {
     if (!playedSuccessfully) {
       await playFallbackTone(connection);
     }
+    return true;
+  } catch (err) {
+    console.error(`[AUDIO ERROR] playMatchSong failed: ${err.message}`);
+    return false;
   } finally {
     debugLog('audio disconnect');
-    connection.destroy();
+    if (connection) connection.destroy();
   }
 }
 
@@ -490,10 +495,14 @@ client.on('interactionCreate', async interaction => {
     await interaction.reply({ content: `🔊 Test audio: ${typ}${customUrl ? ' (custom URL)' : ''}`, ephemeral: true });
 
     try {
-      await playMatchSong(typ === 'win', customUrl || null);
-      await interaction.followUp({ content: '✅ Test audio zakończony (sprawdź kanał głosowy).', ephemeral: true });
+      const ok = await playMatchSong(typ === 'win', customUrl || null);
+      if (ok) {
+        await interaction.followUp({ content: '✅ Test audio zakończony (sprawdź kanał głosowy).', ephemeral: true });
+      } else {
+        await interaction.followUp({ content: '⚠️ Audio nie wystartowało. Sprawdź uprawnienia Speak/Connect i VOICE_CHANNEL_ID.', ephemeral: true });
+      }
     } catch (err) {
-      await interaction.followUp({ content: `❌ Błąd audio: ${err.message}`, ephemeral: true });
+      await interaction.followUp({ content: `❌ Błąd audio (unexpected): ${err.message}`, ephemeral: true });
     }
   }
 
