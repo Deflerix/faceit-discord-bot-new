@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, SlashCommandBuilder, PermissionFlagsBits, AttachmentBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
 const axios = require('axios');
 const fs = require('fs');
 const express = require("express");
@@ -19,7 +19,13 @@ const {
   CHANNEL_ID,
   CHECK_INTERVAL,
   FACEIT_NICKS,
-  GUILD_ID
+  GUILD_ID,
+  IMAGE_WIN_1,
+  IMAGE_WIN_2,
+  IMAGE_WIN_3,
+  IMAGE_LOSE_1,
+  IMAGE_LOSE_2,
+  IMAGE_LOSE_3
 } = process.env;
 
 const nicknames = FACEIT_NICKS.split(',').map(n => n.trim());
@@ -28,19 +34,15 @@ let checkedMatches = new Set();
 let playerCache = {};
 let zmeczStats = {};
 
-// ================= AXIOS =================
-const api = axios.create({
-  timeout: 5000,
-  headers: { Authorization: `Bearer ${FACEIT_API_KEY}` }
-});
-
 // ================= FILE STORAGE =================
 const saveMatches = () => fs.writeFileSync('matches.json', JSON.stringify([...checkedMatches].slice(-100)));
 const loadMatches = () => { if (fs.existsSync('matches.json')) checkedMatches = new Set(JSON.parse(fs.readFileSync('matches.json'))); };
 const saveLeaderboard = () => fs.writeFileSync('leaderboard.json', JSON.stringify(zmeczStats, null, 2));
 const loadLeaderboard = () => { if (fs.existsSync('leaderboard.json')) zmeczStats = JSON.parse(fs.readFileSync('leaderboard.json')); };
 
-// ================= FACEIT =================
+// ================= FACEIT API =================
+const api = axios.create({ timeout: 5000, headers: { Authorization: `Bearer ${FACEIT_API_KEY}` } });
+
 async function getPlayer(nick) {
   if (playerCache[nick]) return playerCache[nick];
   const res = await api.get(`https://open.faceit.com/data/v4/players?nickname=${nick}`);
@@ -59,10 +61,7 @@ async function getMatchStats(matchId) {
 }
 
 // ================= HELPERS =================
-function getMention(nick) {
-  const id = process.env[`MENTION_${nick}`];
-  return id ? `<@${id}>` : nick;
-}
+function getMention(nick) { const id = process.env[`MENTION_${nick}`]; return id ? `<@${id}>` : nick; }
 
 function formatPlayerStats(players = []) {
   return players.map(p => {
@@ -73,7 +72,6 @@ function formatPlayerStats(players = []) {
 }
 
 function getTeamScore(round, ourTeam) {
-  if (!round.teams || round.teams.length < 2) return { our: "?", enemy: "?" };
   const [s1, s2] = (round.round_stats?.Score || "0/0").split("/").map(Number);
   const [team1, team2] = round.teams;
   return ourTeam === team1 ? { our: s1, enemy: s2 } : { our: s2, enemy: s1 };
@@ -98,8 +96,8 @@ function getElProfesore(players) {
 
 function getRandomImage(isWin) {
   const images = isWin
-    ? [process.env.IMAGE_WIN_1, process.env.IMAGE_WIN_2, process.env.IMAGE_WIN_3]
-    : [process.env.IMAGE_LOSE_1, process.env.IMAGE_LOSE_2, process.env.IMAGE_LOSE_3];
+    ? [IMAGE_WIN_1, IMAGE_WIN_2, IMAGE_WIN_3]
+    : [IMAGE_LOSE_1, IMAGE_LOSE_2, IMAGE_LOSE_3];
   const valid = images.filter(Boolean);
   if (!valid.length) return null;
   return valid[Math.floor(Math.random() * valid.length)];
@@ -108,40 +106,26 @@ function getRandomImage(isWin) {
 // ================= MATCH =================
 async function processMatch(nick, forceSend = false, interaction = null) {
   try {
-    console.log(`Sprawdzam mecz dla ${nick}...`);
     const player = await getPlayer(nick);
     const lastMatch = await getLastMatch(player.player_id);
-    if (!lastMatch) {
-      console.log(`${nick} nie ma ostatniego meczu.`);
-      return;
-    }
-
+    if (!lastMatch) return;
     if (checkedMatches.has(lastMatch.match_id) && !forceSend) return;
 
     const stats = await getMatchStats(lastMatch.match_id);
     const round = stats.rounds?.[0];
-    if (!round) {
-      console.log(`${nick} brak rund w meczu ${lastMatch.match_id}.`);
-      return;
-    }
+    if (!round) return;
 
-    const ourTeam = round.teams?.find(t =>
-      t.players?.some(p => p.nickname.toLowerCase() === nick.toLowerCase())
-    );
-    if (!ourTeam) {
-      console.log(`${nick} nie znalazł swojej drużyny w meczu ${lastMatch.match_id}.`);
-      return;
-    }
+    const ourTeam = round.teams?.find(t => t.players?.some(p => p.nickname.toLowerCase() === nick.toLowerCase()));
+    if (!ourTeam) return;
+    const enemyTeam = round.teams.find(t => t !== ourTeam);
 
-    const enemyTeam = round.teams?.find(t => t !== ourTeam);
     const { our, enemy } = getTeamScore(round, ourTeam);
     const isWin = our > enemy;
-    const resultText = isWin ? "🟢 WIN" : "🔴 LOSE";
 
+    const resultText = isWin ? "🟢 WIN" : "🔴 LOSE";
     const top = getTopFragger(ourTeam.players);
     const profesore = getElProfesore(ourTeam.players);
 
-    // ELO
     let eloLines = "";
     for (const n of nicknames) {
       try {
@@ -149,29 +133,20 @@ async function processMatch(nick, forceSend = false, interaction = null) {
         const elo = p.games?.cs2?.faceit_elo || 0;
         const prev = playerCache[n]?.lastElo ?? "X";
         eloLines += `-${n} ${prev} → ${elo}\n`;
-        playerCache[n] = { ...playerCache[n], lastElo: elo };
-      } catch {
-        eloLines += `-${n} brak danych\n`;
-      }
+        playerCache[n].lastElo = elo;
+      } catch { eloLines += `-${n} brak danych\n`; }
     }
 
     const mentions = nicknames.map(getMention).join(' ');
-    const map = round.round_stats?.Map || "Unknown";
-    const eventTimeRaw = lastMatch.finished_at || lastMatch.started_at || Date.now()/1000;
-    const eventTime = new Date(eventTimeRaw*1000).toLocaleString('pl-PL', {
-      day:'2-digit', month:'2-digit', year:'numeric',
-      hour:'2-digit', minute:'2-digit'
-    });
-
     const image = getRandomImage(isWin);
 
     const message = `📊 Raport ${mentions}
 ${resultText} | ${our}:${enemy}
-📅 Data: ${eventTime}
-🌍 Mapa: ${map}
+📅 Data: ${new Date((lastMatch.finished_at||lastMatch.started_at)*1000).toLocaleString('pl-PL')}
+🌍 Mapa: ${round.round_stats?.Map || "-"}
 
 🐐 GOAT: ${top.nick} (${top.kills})
-${profesore ? `🚑 PROFESORE: ${profesore.nick} (${profesore.kills})` : ""}
+🚑 PROFESORE: ${profesore ? `${profesore.nick} (${profesore.kills})` : "-"}
 
 📈 ELO:
 ${eloLines}
@@ -182,8 +157,7 @@ ${formatPlayerStats(ourTeam.players)}
 📋 ENEMY:
 ${formatPlayerStats(enemyTeam?.players)}`;
 
-    const payload = { content: message };
-    if (image) payload.files = [new AttachmentBuilder(image)];
+    const payload = image ? { content: message, files: [image] } : { content: message };
 
     if (interaction) await interaction.reply(payload);
     else {
@@ -193,10 +167,7 @@ ${formatPlayerStats(enemyTeam?.players)}`;
       checkedMatches.add(lastMatch.match_id);
       saveMatches();
     }
-
-  } catch (err) {
-    console.error("Błąd w processMatch:", err);
-  }
+  } catch (err) { console.error(err.message); }
 }
 
 // ================= READY =================
@@ -205,39 +176,34 @@ client.once('ready', async () => {
   loadMatches();
   loadLeaderboard();
 
+  // rejestracja komend
   const commands = [
     new SlashCommandBuilder()
       .setName('checkmatch')
       .setDescription('Sprawdza ostatni mecz gracza')
-      .addStringOption(o => o.setName('nick').setDescription('Nick gracza na FACEIT').setRequired(true)),
-
+      .addStringOption(o => o.setName('nick').setDescription('Nick FACEIT').setRequired(true)),
     new SlashCommandBuilder()
       .setName('zmecz_zweiha')
       .setDescription('Oznacza, że ktoś zmeczył Zweiha 🍆'),
-
     new SlashCommandBuilder()
       .setName('leaderboard')
       .setDescription('Pokazuje ranking zmeczenia Zweiha'),
-
     new SlashCommandBuilder()
       .setName('resetleaderboard')
       .setDescription('Resetuje leaderboard')
       .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
   ];
 
-  // Poprawna rejestracja wszystkich komend
-  try {
-    await client.application.commands.set(commands.map(c => c.toJSON()), GUILD_ID);
-    console.log("Komendy zarejestrowane.");
-  } catch (err) {
-    console.error("Błąd przy rejestracji komend:", err.message);
-  }
+  for (const c of commands) await client.application.commands.create(c, GUILD_ID);
 
-  // Auto check
-  setInterval(async () => { for (const n of nicknames) await processMatch(n); }, Number(CHECK_INTERVAL) || 180000);
+  // auto wysyłka ostatniego meczu przy starcie
+  for (const nick of nicknames) processMatch(nick, true);
+
+  // interwał auto-check
+  setInterval(() => nicknames.forEach(n => processMatch(n)), Number(CHECK_INTERVAL) || 180000);
 });
 
-// ================= INTERACTION =================
+// ================= INTERACTIONS =================
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
@@ -255,13 +221,13 @@ client.on('interactionCreate', async interaction => {
   }
 
   if (interaction.commandName === 'leaderboard') {
-    const sorted = Object.entries(zmeczStats).filter(e=>e[1]>0).sort((a,b)=>b[1]-a[1]).slice(0,10);
+    const sorted = Object.entries(zmeczStats).sort((a,b) => b[1]-a[1]).slice(0,10);
     if (!sorted.length) return interaction.reply({ content: "Leaderboard:\nBrak danych." });
 
     let text = "Leaderboard:\n";
-    sorted.forEach((e,i)=>{
+    sorted.forEach((e,i) => {
       const [userId, count] = e;
-      const pos = i===0?"🥇":i===1?"🥈":i===2?"🥉":`${i+1}.`;
+      let pos = i===0?"🥇":i===1?"🥈":i===2?"🥉":`${i+1}.`;
       text += `${pos} <@${userId}> ${count}\n`;
     });
     await interaction.reply({ content: text });
