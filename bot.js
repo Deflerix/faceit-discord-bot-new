@@ -153,9 +153,14 @@ client.once('ready', async () => {
 
   // Tworzenie komend Slash
   const commands = [
-    new SlashCommandBuilder().setName('checkmatch').setDescription('Sprawdza mecz').addStringOption(o => o.setName('nick').setRequired(true))
+    new SlashCommandBuilder()
+      .setName('checkmatch')
+      .setDescription('Sprawdza mecz')
+      .addStringOption(o => o.setName('nick').setRequired(true))
   ];
-  for (const c of commands) await client.application.commands.create(c, GUILD_ID);
+
+  // Nadpisanie wszystkich komend w guildzie
+  await client.application.commands.set(commands, GUILD_ID);
 
   // Cykliczne sprawdzanie meczy
   setInterval(() => { nicknames.forEach(n => processMatch(n)); }, Number(CHECK_INTERVAL) || 180000);
