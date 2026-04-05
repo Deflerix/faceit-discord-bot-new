@@ -163,8 +163,8 @@ function getRandomImage(isWin) {
   return selected;
 }
 
-async function playMatchSong(isWin) {
-  const songUrl = getSongUrl(isWin);
+async function playMatchSong(isWin, overrideUrl = null) {
+  const songUrl = overrideUrl || getSongUrl(isWin);
   if (!VOICE_CHANNEL_ID || !songUrl) return;
   debugLog(`playMatchSong(isWin=${isWin}) url=${songUrl}`);
 
@@ -363,7 +363,26 @@ client.once('clientReady', async () => {
 
   const commands = [
     new SlashCommandBuilder().setName('zmecz_zweiha').setDescription('Zlicza zmeczenie Zweiha'),
-    new SlashCommandBuilder().setName('leaderboard').setDescription('Pokazuje ranking zmeczeń')
+    new SlashCommandBuilder().setName('leaderboard').setDescription('Pokazuje ranking zmeczeń'),
+    new SlashCommandBuilder()
+      .setName('testaudio')
+      .setDescription('Testuje audio na kanale VOICE_CHANNEL_ID')
+      .addStringOption(option =>
+        option
+          .setName('typ')
+          .setDescription('Jaki dźwięk puścić')
+          .setRequired(true)
+          .addChoices(
+            { name: 'win', value: 'win' },
+            { name: 'lose', value: 'lose' }
+          )
+      )
+      .addStringOption(option =>
+        option
+          .setName('url')
+          .setDescription('Opcjonalny bezpośredni URL audio (mp3/ogg)')
+          .setRequired(false)
+      )
   ];
 
   for (const c of commands) await client.application.commands.create(c, GUILD_ID);
@@ -399,6 +418,20 @@ client.on('interactionCreate', async interaction => {
     });
 
     await interaction.reply({ content: message });
+  }
+
+  if (interaction.commandName === 'testaudio') {
+    const typ = interaction.options.getString('typ', true);
+    const customUrl = interaction.options.getString('url');
+
+    await interaction.reply({ content: `🔊 Test audio: ${typ}${customUrl ? ' (custom URL)' : ''}`, ephemeral: true });
+
+    try {
+      await playMatchSong(typ === 'win', customUrl || null);
+      await interaction.followUp({ content: '✅ Test audio zakończony (sprawdź kanał głosowy).', ephemeral: true });
+    } catch (err) {
+      await interaction.followUp({ content: `❌ Błąd audio: ${err.message}`, ephemeral: true });
+    }
   }
 
 });
