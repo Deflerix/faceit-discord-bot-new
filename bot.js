@@ -280,9 +280,16 @@ async function processMatch(forceSend = false) {
         await channel.send({ files: [image] });
       }
 
-      await playMatchSong(isWin);
+      // Oznacz mecz jako wysłany ZANIM odpalimy audio, żeby błąd muzyki nie powodował
+      // ponownego wysyłania tego samego raportu w kolejnych tickach.
       checkedMatches.add(matchId);
       saveMatches();
+
+      try {
+        await playMatchSong(isWin);
+      } catch (audioErr) {
+        console.error(`[AUDIO WARN] Nie udało się odtworzyć muzyki: ${audioErr.message}`);
+      }
     }
   } catch (err) {
     console.error(err.message);
