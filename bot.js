@@ -35,6 +35,8 @@ const {
 } = process.env;
 const nicknames = (FACEIT_NICKS || '').split(',').map(n => n.trim()).filter(Boolean);
 const DEBUG = ['1', 'true', 'yes', 'on'].includes(String(process.env.DEBUG || '').toLowerCase());
+const DEFAULT_WIN_SOUND = 'https://samplelib.com/lib/preview/mp3/sample-3s.mp3';
+const DEFAULT_LOSE_SOUND = 'https://samplelib.com/lib/preview/mp3/sample-6s.mp3';
 
 let checkedMatches = new Set();
 let playerCache = {}; // cache profilu FACEIT
@@ -44,6 +46,19 @@ let leaderboard = {};
 
 function debugLog(message) {
   if (DEBUG) console.log(`[DEBUG] ${message}`);
+}
+
+function getSongUrl(isWin) {
+  const configured = isWin ? SONG_WIN_URL : SONG_LOSE_URL;
+  const fallback = isWin ? DEFAULT_WIN_SOUND : DEFAULT_LOSE_SOUND;
+  if (!configured) return fallback;
+
+  if (/youtu\.?be/i.test(configured)) {
+    console.log('[AUDIO WARN] URL z YouTube bywa niestabilny w hostingu. Używam domyślnego MP3.');
+    return fallback;
+  }
+
+  return configured;
 }
 
 // ================= AXIOS =================
@@ -142,7 +157,7 @@ function getRandomImage(isWin) {
 }
 
 async function playMatchSong(isWin) {
-  const songUrl = isWin ? SONG_WIN_URL : SONG_LOSE_URL;
+  const songUrl = getSongUrl(isWin);
   if (!VOICE_CHANNEL_ID || !songUrl) return;
   debugLog(`playMatchSong(isWin=${isWin}) url=${songUrl}`);
 
@@ -205,7 +220,7 @@ async function playMatchSong(isWin) {
 function warnAudioConfig() {
   if (!VOICE_CHANNEL_ID) console.log('[INFO] Brak VOICE_CHANNEL_ID - audio po meczu wyłączone.');
   if (!SONG_WIN_URL || !SONG_LOSE_URL) {
-    console.log('[INFO] Brak SONG_WIN_URL lub SONG_LOSE_URL - audio po meczu wyłączone.');
+    console.log('[INFO] Brak SONG_WIN_URL lub SONG_LOSE_URL - użyte będą domyślne krótkie MP3.');
   }
 }
 
