@@ -5,6 +5,7 @@ const fs = require('fs');
 const express = require('express');
 const {
   AudioPlayerStatus,
+  StreamType,
   VoiceConnectionStatus,
   createAudioPlayer,
   createAudioResource,
@@ -14,6 +15,7 @@ const {
 } = require('@discordjs/voice');
 const play = require('play-dl');
 const ffmpegPath = require('ffmpeg-static');
+const { spawn } = require('child_process');
 
 // ================= KEEP ALIVE =================
 const app = express();
@@ -64,6 +66,35 @@ function getSongUrl(isWin) {
 
 function isDirectAudioUrl(url) {
   return /\.(mp3|ogg|wav|m4a)(\?.*)?$/i.test(url || '');
+}
+
+async function playFallbackTone(connection) {
+  console.log('[AUDIO WARN] Uruchamiam awaryjny test tone (ffmpeg sine).');
+  const player = createAudioPlayer();
+  const ffmpeg = spawn(process.env.FFMPEG_PATH || ffmpegPath, [
+    '-f', 'lavfi',
+    '-i', 'sine=frequency=880:duration=3',
+    '-f', 's16le',
+    '-ar', '48000',
+    '-ac', '2',
+    'pipe:1'
+  ], { stdio: ['ignore', 'pipe', 'pipe'] });
+
+  ffmpeg.stderr.on('data', () => {});
+  ffmpeg.on('error', err => console.error(`[AUDIO ERROR] ffmpeg fallback: ${err.message}`));
+
+  const resource = createAudioResource(ffmpeg.stdout, {
+    inputType: StreamType.Raw,
+    inlineVolume: true
+  });
+  if (resource.volume) resource.volume.setVolume(0.8);
+  connection.subscribe(player);
+  player.play(resource);
+  await entersState(player, AudioPlayerStatus.Playing, 10_000);
+  await new Promise(resolve => {
+    player.once(AudioPlayerStatus.Idle, resolve);
+    player.once('error', () => resolve());
+  });
 }
 
 // ================= AXIOS =================
@@ -192,6 +223,8 @@ async function playMatchSong(isWin, overrideUrl = null) {
       debugLog('stage voice: requested to speak / unsuppressed');
     }
 
+    let playedSuccessfully = false;
+
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       debugLog(`audio attempt=${attempt}`);
       let resource;
@@ -215,36 +248,48 @@ async function playMatchSong(isWin, overrideUrl = null) {
         }
       } catch (sourceErr) {
         console.error(`[AUDIO ERROR] Nie udało się pobrać źródła audio: ${sourceErr.message}`);
-        if (attempt === 2) throw sourceErr;
         continue;
       }
 
-      if (resource.volume) resource.volume.setVolume(0.8);
-      const player = createAudioPlayer();
-      const startedAt = Date.now();
+      let playedMs = 0;
+      try {
+        if (resource.volume) resource.volume.setVolume(0.8);
+        const player = createAudioPlayer();
+        const startedAt = Date.now();
 
-      connection.subscribe(player);
-      player.play(resource);
-      await entersState(player, AudioPlayerStatus.Playing, 20_000);
+        connection.subscribe(player);
+        player.play(resource);
+        await entersState(player, AudioPlayerStatus.Playing, 20_000);
 
-      const playedMs = await new Promise(resolve => {
-        const hardTimeout = setTimeout(() => resolve(Date.now() - startedAt), 180_000);
+        playedMs = await new Promise(resolve => {
+          const hardTimeout = setTimeout(() => resolve(Date.now() - startedAt), 180_000);
 
-        player.on(AudioPlayerStatus.Idle, () => {
-          clearTimeout(hardTimeout);
-          resolve(Date.now() - startedAt);
+          player.on(AudioPlayerStatus.Idle, () => {
+            clearTimeout(hardTimeout);
+            resolve(Date.now() - startedAt);
+          });
+
+          player.on('error', err => {
+            console.error(`[AUDIO ERROR] ${err.message}`);
+            clearTimeout(hardTimeout);
+            resolve(Date.now() - startedAt);
+          });
         });
-
-        player.on('error', err => {
-          console.error(`[AUDIO ERROR] ${err.message}`);
-          clearTimeout(hardTimeout);
-          resolve(Date.now() - startedAt);
-        });
-      });
+      } catch (playbackErr) {
+        console.error(`[AUDIO ERROR] Problem podczas odtwarzania: ${playbackErr.message}`);
+        continue;
+      }
 
       // Jeśli utwór zakończył się podejrzanie szybko (np. 3-5s), spróbuj raz jeszcze.
-      if (playedMs >= 8_000 || attempt === 2) break;
+      if (playedMs >= 8_000 || attempt === 2) {
+        playedSuccessfully = playedMs > 0;
+        break;
+      }
       console.log('[AUDIO WARN] Odtwarzanie zakończyło się za szybko, ponawiam próbę...');
+    }
+
+    if (!playedSuccessfully) {
+      await playFallbackTone(connection);
     }
   } finally {
     debugLog('audio disconnect');
