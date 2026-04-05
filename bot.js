@@ -3,6 +3,15 @@ const { Client, GatewayIntentBits, SlashCommandBuilder, EmbedBuilder } = require
 const axios = require('axios');
 const fs = require('fs');
 const express = require('express');
+const {
+  AudioPlayerStatus,
+  VoiceConnectionStatus,
+  createAudioPlayer,
+  createAudioResource,
+  entersState,
+  joinVoiceChannel
+} = require('@discordjs/voice');
+const play = require('play-dl');
 
 // ================= KEEP ALIVE =================
 const app = express();
@@ -20,9 +29,10 @@ const {
   CHECK_INTERVAL,
   FACEIT_NICKS,
   GUILD_ID,
-  MUSIC_BOT_CHANNEL_ID
+  VOICE_CHANNEL_ID,
+  SONG_WIN_URL,
+  SONG_LOSE_URL
 } = process.env;
-const AUTO_MUSIC_COMMAND = process.env.AUTO_MUSIC_COMMAND || '!play freed from desire';
 const nicknames = (FACEIT_NICKS || '').split(',').map(n => n.trim()).filter(Boolean);
 
 let checkedMatches = new Set();
@@ -123,13 +133,55 @@ function getRandomImage(isWin) {
   return selected;
 }
 
-function normalizeMusicCommand(command) {
-  const raw = (command || '').trim();
-  if (!raw) return '';
-  // Slash-komend innego bota nie da się wywołać zwykłą wiadomością tekstową.
-  // Jeśli ktoś poda "/play ...", zamieniamy na prefiksową wersję "!play ...".
-  if (raw.startsWith('/')) return `!${raw.slice(1)}`;
-  return raw;
+async function playMatchSong(isWin) {
+  const songUrl = isWin ? SONG_WIN_URL : SONG_LOSE_URL;
+  if (!VOICE_CHANNEL_ID || !songUrl) return;
+
+  const voiceChannel = await client.channels.fetch(VOICE_CHANNEL_ID);
+  if (!voiceChannel || !voiceChannel.isVoiceBased()) {
+    console.log('[WARN] VOICE_CHANNEL_ID nie wskazuje kanału głosowego.');
+    return;
+  }
+
+  const connection = joinVoiceChannel({
+    channelId: voiceChannel.id,
+    guildId: voiceChannel.guild.id,
+    adapterCreator: voiceChannel.guild.voiceAdapterCreator,
+    selfDeaf: true
+  });
+
+  try {
+    await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
+
+    const stream = await play.stream(songUrl);
+    const resource = createAudioResource(stream.stream, { inputType: stream.type });
+    const player = createAudioPlayer();
+
+    connection.subscribe(player);
+    player.play(resource);
+
+    await new Promise(resolve => {
+      const hardTimeout = setTimeout(resolve, 90_000);
+      player.on(AudioPlayerStatus.Idle, () => {
+        clearTimeout(hardTimeout);
+        resolve();
+      });
+      player.on('error', err => {
+        console.error(`[AUDIO ERROR] ${err.message}`);
+        clearTimeout(hardTimeout);
+        resolve();
+      });
+    });
+  } finally {
+    connection.destroy();
+  }
+}
+
+function warnAudioConfig() {
+  if (!VOICE_CHANNEL_ID) console.log('[INFO] Brak VOICE_CHANNEL_ID - audio po meczu wyłączone.');
+  if (!SONG_WIN_URL || !SONG_LOSE_URL) {
+    console.log('[INFO] Brak SONG_WIN_URL lub SONG_LOSE_URL - audio po meczu wyłączone.');
+  }
 }
 
 // ================= MATCH =================
@@ -219,15 +271,7 @@ async function processMatch(forceSend = false) {
         await channel.send({ files: [image] });
       }
 
-      if (MUSIC_BOT_CHANNEL_ID) {
-        const musicChannel = await client.channels.fetch(MUSIC_BOT_CHANNEL_ID);
-        if (musicChannel && musicChannel.isTextBased()) {
-          const musicCommand = normalizeMusicCommand(AUTO_MUSIC_COMMAND);
-          if (musicCommand) {
-            await musicChannel.send(musicCommand);
-          }
-        }
-      }
+      await playMatchSong(isWin);
       checkedMatches.add(matchId);
       saveMatches();
     }
@@ -239,6 +283,7 @@ async function processMatch(forceSend = false) {
 // ================= READY =================
 client.once('ready', async () => {
   console.log(`Zalogowano jako ${client.user.tag}`);
+  warnAudioConfig();
   loadMatches();
   loadLeaderboard();
 
