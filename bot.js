@@ -156,7 +156,8 @@ async function playMatchSong(isWin) {
     channelId: voiceChannel.id,
     guildId: voiceChannel.guild.id,
     adapterCreator: voiceChannel.guild.voiceAdapterCreator,
-    selfDeaf: true
+    selfDeaf: false,
+    selfMute: false
   });
 
   try {
@@ -164,7 +165,11 @@ async function playMatchSong(isWin) {
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       debugLog(`audio attempt=${attempt}`);
       const stream = await play.stream(songUrl);
-      const resource = createAudioResource(stream.stream, { inputType: stream.type });
+      const resource = createAudioResource(stream.stream, {
+        inputType: stream.type,
+        inlineVolume: true
+      });
+      if (resource.volume) resource.volume.setVolume(0.8);
       const player = createAudioPlayer();
       const startedAt = Date.now();
 
