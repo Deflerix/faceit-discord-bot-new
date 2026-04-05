@@ -47,7 +47,6 @@ async function getMatchStats(matchId) {
 
 // ================= HELPERS =================
 function getMention(nick) { const id = process.env[`MENTION_${nick}`]; return id ? `<@${id}>` : nick; }
-
 function formatPlayerStats(players = []) {
     return players.map(p => {
         const s = p.player_stats || {};
@@ -69,7 +68,7 @@ function getTopFragger(players) {
 function getElProfesore(players) {
     const target = ["deflerix", "w4kky", "pawik"];
     let filtered = players.filter(p => target.includes(p.nickname.toLowerCase()));
-    if (!filtered.length) filtered = players;
+    if (!filtered.length) filtered = players; // fallback
     return filtered.reduce((worst, p) => { const kills = Number(p.player_stats?.Kills || 0); return kills < worst.kills ? { nick: p.nickname, kills } : worst; }, { nick: "?", kills: Infinity });
 }
 
@@ -92,34 +91,34 @@ async function processMatch(nick, forceSend = false, interaction = null) {
         if (!lastMatch) return;
         if (checkedMatches.has(lastMatch.match_id) && !forceSend) return;
 
-        const stats = await getMatchStats(lastMatch.match_id);  
-        const round = stats.rounds?.[0];  
-        if (!round) return;  
+        const stats = await getMatchStats(lastMatch.match_id);
+        const round = stats.rounds?.[0];
+        if (!round) return;
 
-        const ourTeam = round.teams?.find(t => t.players?.some(p => p.nickname.toLowerCase() === nick.toLowerCase()));  
-        if (!ourTeam) return;  
-        const enemyTeam = round.teams.find(t => t !== ourTeam);  
+        const ourTeam = round.teams?.find(t => t.players?.some(p => p.nickname.toLowerCase() === nick.toLowerCase()));
+        if (!ourTeam) return;
+        const enemyTeam = round.teams.find(t => t !== ourTeam);
 
-        const { our, enemy } = getTeamScore(round, ourTeam);  
-        const isWin = our > enemy;  
+        const { our, enemy } = getTeamScore(round, ourTeam);
+        const isWin = our > enemy;
 
-        const resultText = `${isWin ? "🟢 WIN" : "🔴 LOSE"} | ${our}:${enemy}`;  
-        const top = getTopFragger(ourTeam.players);  
-        const profesore = getElProfesore(ourTeam.players);  
+        const resultText = `${isWin ? "🟢 WIN" : "🔴 LOSE"} | ${our}:${enemy}`;
+        const top = getTopFragger(ourTeam.players);
+        const profesore = getElProfesore(ourTeam.players);
 
-        let eloLines = "";  
-        for (const n of nicknames) {  
-            try {  
-                const p = await getPlayer(n);  
-                const elo = p.games?.cs2?.faceit_elo || 0;  
-                const prev = playerCache[n]?.lastElo ?? "X";  
-                eloLines += `-${n} ${prev} → ${elo}\n`;  
-                playerCache[n].lastElo = elo;  
-            } catch { eloLines += `-${n} brak danych\n`; }  
-        }  
+        let eloLines = "";
+        for (const n of nicknames) {
+            try {
+                const p = await getPlayer(n);
+                const elo = p.games?.cs2?.faceit_elo || 0;
+                const prev = playerCache[n]?.lastElo ?? "X";
+                eloLines += `-${n} ${prev} → ${elo}\n`;
+                playerCache[n].lastElo = elo;
+            } catch { eloLines += `-${n} brak danych\n`; }
+        }
 
-        const mentions = nicknames.map(getMention).join(' ');  
-        const image = getRandomImage(isWin);  
+        const mentions = nicknames.map(getMention).join(' ');
+        const image = getRandomImage(isWin);
 
         const message = `📊 Raport ${mentions}
 
@@ -137,13 +136,13 @@ ${formatPlayerStats(ourTeam.players)}
 📋 ENEMY:
 ${formatPlayerStats(enemyTeam?.players)}`;
 
-        if (interaction) await interaction.reply({ content: message, files: image ? [image] : [] });  
-        else {  
-            const channel = await client.channels.fetch(CHANNEL_ID);  
-            if (!channel) return;  
-            await channel.send({ content: message, files: image ? [image] : [] });  
-            checkedMatches.add(lastMatch.match_id);  
-            saveMatches();  
+        if (interaction) await interaction.reply({ content: message, files: image ? [image] : [] });
+        else {
+            const channel = await client.channels.fetch(CHANNEL_ID);
+            if (!channel) return;
+            await channel.send({ content: message, files: image ? [image] : [] });
+            checkedMatches.add(lastMatch.match_id);
+            saveMatches();
         }
 
     } catch (err) { console.error(err.message); }
@@ -162,7 +161,13 @@ client.once('ready', async () => {
 
     // ================= SEND STARTUP REPORT =================
     try {
-        const lastMatches = await Promise.all(nicknames.map(nick => getLastMatch((await getPlayer(nick)).player_id)));
+        const lastMatches = [];
+        for (const nick of nicknames) {
+            const player = await getPlayer(nick);
+            const lastMatch = await getLastMatch(player.player_id);
+            lastMatches.push(lastMatch);
+        }
+
         const uniqueMatchIds = [...new Set(lastMatches.map(m => m?.match_id).filter(Boolean))];
 
         if (uniqueMatchIds.length === 1) {
