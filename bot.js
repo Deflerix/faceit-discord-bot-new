@@ -11,9 +11,7 @@ app.get("/", (req, res) => res.send("Bot is alive!"));
 app.listen(port, () => console.log(`Server running on port ${port}`));
 // =============================================
 
-const client = new Client({
-  intents: [GatewayIntentBits.Guilds]
-});
+const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
 const {
   DISCORD_TOKEN,
@@ -63,9 +61,7 @@ async function getLastMatch(playerId) {
 }
 
 async function getMatchStats(matchId) {
-  const res = await api.get(
-    `https://open.faceit.com/data/v4/matches/${matchId}/stats`
-  );
+  const res = await api.get(`https://open.faceit.com/data/v4/matches/${matchId}/stats`);
   return res.data;
 }
 
@@ -79,18 +75,15 @@ function formatPlayerStats(players = []) {
   return players.map(p => {
     const s = p.player_stats || {};
     const kd = Number(s["K/D Ratio"]) || 0;
-
     return `\`${p.nickname.padEnd(12)} | ${s.Kills||0}/${s.Deaths||0} | ${kd.toFixed(2)} | HS:${s["Headshots %"]||"-"}\``;
   }).join("\n");
 }
 
 function getTeamScore(round, ourTeam) {
+  if (!round.teams || round.teams.length < 2) return { our: "?", enemy: "?" };
   const [s1, s2] = (round.round_stats?.Score || "0/0").split("/").map(Number);
   const [team1, team2] = round.teams;
-
-  return ourTeam === team1
-    ? { our: s1, enemy: s2 }
-    : { our: s2, enemy: s1 };
+  return ourTeam === team1 ? { our: s1, enemy: s2 } : { our: s2, enemy: s1 };
 }
 
 function getTopFragger(players) {
@@ -101,14 +94,9 @@ function getTopFragger(players) {
 }
 
 function getElProfesore(players) {
-  const target = ["deflerix", "w4kky", "pawik"];
-
-  const filtered = players.filter(p =>
-    target.includes(p.nickname.toLowerCase())
-  );
-
+  const target = ["deflerix","w4kky","pawik"];
+  const filtered = players.filter(p => target.includes(p.nickname.toLowerCase()));
   if (!filtered.length) return null;
-
   return filtered.reduce((worst, p) => {
     const kills = Number(p.player_stats?.Kills || 0);
     return kills < worst.kills ? { nick: p.nickname, kills } : worst;
@@ -117,20 +105,10 @@ function getElProfesore(players) {
 
 function getRandomImage(isWin) {
   const images = isWin
-    ? [
-        process.env.IMAGE_WIN_1,
-        process.env.IMAGE_WIN_2,
-        process.env.IMAGE_WIN_3
-      ]
-    : [
-        process.env.IMAGE_LOSE_1,
-        process.env.IMAGE_LOSE_2,
-        process.env.IMAGE_LOSE_3
-      ];
-
+    ? [process.env.IMAGE_WIN_1, process.env.IMAGE_WIN_2, process.env.IMAGE_WIN_3]
+    : [process.env.IMAGE_LOSE_1, process.env.IMAGE_LOSE_2, process.env.IMAGE_LOSE_3];
   const valid = images.filter(Boolean);
   if (!valid.length) return null;
-
   return valid[Math.floor(Math.random() * valid.length)];
 }
 
@@ -152,25 +130,24 @@ async function processMatch(nick, forceSend = false, interaction = null) {
     );
     if (!ourTeam) return;
 
-    const enemyTeam = round.teams.find(t => t !== ourTeam);
+    const enemyTeam = round.teams?.find(t => t !== ourTeam);
 
     const { our, enemy } = getTeamScore(round, ourTeam);
     const isWin = our > enemy;
 
     const resultText = isWin ? "🟢 WIN" : "🔴 LOSE";
-
     const top = getTopFragger(ourTeam.players);
     const profesore = getElProfesore(ourTeam.players);
 
+    // ELO
     let eloLines = "";
     for (const n of nicknames) {
       try {
         const p = await getPlayer(n);
         const elo = p.games?.cs2?.faceit_elo || 0;
         const prev = playerCache[n]?.lastElo ?? "X";
-
         eloLines += `-${n} ${prev} → ${elo}\n`;
-        playerCache[n].lastElo = elo;
+        playerCache[n] = { ...playerCache[n], lastElo: elo };
       } catch {
         eloLines += `-${n} brak danych\n`;
       }
@@ -195,28 +172,20 @@ ${formatPlayerStats(ourTeam.players)}
 ${formatPlayerStats(enemyTeam?.players)}`;
 
     const payload = image
-      ? {
-          content: message,
-          embeds: [{ image: { url: image } }]
-        }
-      : {
-          content: message
-        };
+      ? { content: message, embeds: [{ image: { url: image } }] }
+      : { content: message };
 
-    if (interaction) {
-      await interaction.reply(payload);
-    } else {
+    if (interaction) await interaction.reply(payload);
+    else {
       const channel = await client.channels.fetch(CHANNEL_ID);
       if (!channel) return;
-
       await channel.send(payload);
-
       checkedMatches.add(lastMatch.match_id);
       saveMatches();
     }
 
   } catch (err) {
-    console.error(err.message);
+    console.error("Błąd w processMatch:", err.message);
   }
 }
 
@@ -228,23 +197,30 @@ client.once('ready', async () => {
   const commands = [
     new SlashCommandBuilder()
       .setName('checkmatch')
-      .setDescription('Sprawdza mecz')
-      .addStringOption(o => o.setName('nick').setRequired(true))
+      .setDescription('Sprawdza ostatni mecz gracza')
+      .addStringOption(o =>
+        o.setName('nick')
+         .setDescription('Nick gracza na FACEIT')
+         .setRequired(true)
+      )
   ];
 
   for (const c of commands) {
-    await client.application.commands.create(c, GUILD_ID);
+    try {
+      await client.application.commands.create(c, GUILD_ID);
+    } catch(err) {
+      console.error('Błąd przy tworzeniu komendy:', err.message);
+    }
   }
 
-  setInterval(() => {
-    nicknames.forEach(n => processMatch(n));
+  setInterval(async () => {
+    for (const n of nicknames) await processMatch(n);
   }, Number(CHECK_INTERVAL) || 180000);
 });
 
 // ================= INTERACTION =================
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
-
   if (interaction.commandName === 'checkmatch') {
     const nick = interaction.options.getString('nick');
     await processMatch(nick, true, interaction);
