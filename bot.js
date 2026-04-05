@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, SlashCommandBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
 const axios = require('axios');
 const fs = require('fs');
 const express = require("express");
@@ -26,6 +26,7 @@ const nicknames = FACEIT_NICKS.split(',').map(n => n.trim());
 
 let checkedMatches = new Set();
 let playerCache = {};
+let zmeczStats = {};
 
 // ================= AXIOS =================
 const api = axios.create({
@@ -34,29 +35,21 @@ const api = axios.create({
 });
 
 // ================= FILE STORAGE =================
-const saveMatches = () => {
-  fs.writeFileSync('matches.json', JSON.stringify([...checkedMatches].slice(-100)));
-};
-
-const loadMatches = () => {
-  if (fs.existsSync('matches.json')) {
-    checkedMatches = new Set(JSON.parse(fs.readFileSync('matches.json')));
-  }
-};
+const saveMatches = () => fs.writeFileSync('matches.json', JSON.stringify([...checkedMatches].slice(-100)));
+const loadMatches = () => { if (fs.existsSync('matches.json')) checkedMatches = new Set(JSON.parse(fs.readFileSync('matches.json'))); };
+const saveLeaderboard = () => fs.writeFileSync('leaderboard.json', JSON.stringify(zmeczStats, null, 2));
+const loadLeaderboard = () => { if (fs.existsSync('leaderboard.json')) zmeczStats = JSON.parse(fs.readFileSync('leaderboard.json')); };
 
 // ================= FACEIT =================
 async function getPlayer(nick) {
   if (playerCache[nick]) return playerCache[nick];
-
   const res = await api.get(`https://open.faceit.com/data/v4/players?nickname=${nick}`);
   playerCache[nick] = res.data;
   return res.data;
 }
 
 async function getLastMatch(playerId) {
-  const res = await api.get(
-    `https://open.faceit.com/data/v4/players/${playerId}/history?game=cs2&limit=1`
-  );
+  const res = await api.get(`https://open.faceit.com/data/v4/players/${playerId}/history?game=cs2&limit=1`);
   return res.data.items?.[0];
 }
 
@@ -131,11 +124,10 @@ async function processMatch(nick, forceSend = false, interaction = null) {
     if (!ourTeam) return;
 
     const enemyTeam = round.teams?.find(t => t !== ourTeam);
-
     const { our, enemy } = getTeamScore(round, ourTeam);
     const isWin = our > enemy;
-
     const resultText = isWin ? "🟢 WIN" : "🔴 LOSE";
+
     const top = getTopFragger(ourTeam.players);
     const profesore = getElProfesore(ourTeam.players);
 
@@ -154,9 +146,18 @@ async function processMatch(nick, forceSend = false, interaction = null) {
     }
 
     const mentions = nicknames.map(getMention).join(' ');
+    const map = round.round_stats?.Map || "Unknown";
+    const eventTimeRaw = lastMatch.finished_at || lastMatch.started_at || Date.now()/1000;
+    const eventTime = new Date(eventTimeRaw*1000).toLocaleString('pl-PL', {
+      day:'2-digit', month:'2-digit', year:'numeric',
+      hour:'2-digit', minute:'2-digit'
+    });
+
     const image = getRandomImage(isWin);
 
     const message = `📊 Raport ${mentions}
+📅 Data: ${eventTime}
+🌍 Mapa: ${map}
 ${resultText} | ${our}:${enemy}
 
 🔥 TOP: ${top.nick} (${top.kills})
@@ -171,9 +172,7 @@ ${formatPlayerStats(ourTeam.players)}
 📋 ENEMY:
 ${formatPlayerStats(enemyTeam?.players)}`;
 
-    const payload = image
-      ? { content: message, embeds: [{ image: { url: image } }] }
-      : { content: message };
+    const payload = image ? { content: message, embeds: [{ image: { url: image } }] } : { content: message };
 
     if (interaction) await interaction.reply(payload);
     else {
@@ -193,37 +192,70 @@ ${formatPlayerStats(enemyTeam?.players)}`;
 client.once('ready', async () => {
   console.log(`Zalogowano jako ${client.user.tag}`);
   loadMatches();
+  loadLeaderboard();
 
   const commands = [
     new SlashCommandBuilder()
       .setName('checkmatch')
       .setDescription('Sprawdza ostatni mecz gracza')
-      .addStringOption(o =>
-        o.setName('nick')
-         .setDescription('Nick gracza na FACEIT')
-         .setRequired(true)
-      )
+      .addStringOption(o => o.setName('nick').setDescription('Nick gracza na FACEIT').setRequired(true)),
+
+    new SlashCommandBuilder()
+      .setName('zmecz_zweiha')
+      .setDescription('Oznacza, że ktoś zmeczył Zweiha 🍆'),
+
+    new SlashCommandBuilder()
+      .setName('leaderboard')
+      .setDescription('Pokazuje ranking zmeczenia Zweiha'),
+
+    new SlashCommandBuilder()
+      .setName('resetleaderboard')
+      .setDescription('Resetuje leaderboard')
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
   ];
 
   for (const c of commands) {
-    try {
-      await client.application.commands.create(c, GUILD_ID);
-    } catch(err) {
-      console.error('Błąd przy tworzeniu komendy:', err.message);
-    }
+    try { await client.application.commands.create(c, GUILD_ID); }
+    catch(err){ console.error('Błąd przy tworzeniu komendy:', err.message); }
   }
 
-  setInterval(async () => {
-    for (const n of nicknames) await processMatch(n);
-  }, Number(CHECK_INTERVAL) || 180000);
+  setInterval(async () => { for (const n of nicknames) await processMatch(n); }, Number(CHECK_INTERVAL) || 180000);
 });
 
 // ================= INTERACTION =================
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
+
   if (interaction.commandName === 'checkmatch') {
     const nick = interaction.options.getString('nick');
     await processMatch(nick, true, interaction);
+  }
+
+  if (interaction.commandName === 'zmecz_zweiha') {
+    const userId = interaction.user.id;
+    if (!zmeczStats[userId]) zmeczStats[userId] = 0;
+    zmeczStats[userId] += 1;
+    saveLeaderboard();
+    await interaction.reply({ content: `<@${userId}> zmeczył Zweiha 🍆 🤬` });
+  }
+
+  if (interaction.commandName === 'leaderboard') {
+    const sorted = Object.entries(zmeczStats).filter(e=>e[1]>0).sort((a,b)=>b[1]-a[1]).slice(0,10);
+    if (!sorted.length) return interaction.reply({ content: "Leaderboard:\nBrak danych." });
+
+    let text = "Leaderboard:\n";
+    sorted.forEach((e,i)=>{
+      const [userId, count] = e;
+      const pos = i===0?"🥇":i===1?"🥈":i===2?"🥉":`${i+1}.`;
+      text += `${pos} <@${userId}> ${count}\n`;
+    });
+    await interaction.reply({ content: text });
+  }
+
+  if (interaction.commandName === 'resetleaderboard') {
+    zmeczStats = {};
+    saveLeaderboard();
+    await interaction.reply({ content: "Leaderboard został zresetowany." });
   }
 });
 
