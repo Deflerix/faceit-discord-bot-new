@@ -19,6 +19,7 @@ const nicknames = FACEIT_NICKS.split(',').map(n => n.trim());
 let checkedMatches = new Set();
 let playerCache = {};
 let lastImage = null;
+let leaderboard = {};
 
 // ================= AXIOS =================
 const api = axios.create({ timeout: 5000, headers: { Authorization: `Bearer ${FACEIT_API_KEY}` } });
@@ -26,6 +27,8 @@ const api = axios.create({ timeout: 5000, headers: { Authorization: `Bearer ${FA
 // ================= FILE STORAGE =================
 const saveMatches = () => fs.writeFileSync('matches.json', JSON.stringify([...checkedMatches].slice(-100)));
 const loadMatches = () => { if (fs.existsSync('matches.json')) checkedMatches = new Set(JSON.parse(fs.readFileSync('matches.json'))); };
+const saveLeaderboard = () => fs.writeFileSync('leaderboard.json', JSON.stringify(leaderboard));
+const loadLeaderboard = () => { if (fs.existsSync('leaderboard.json')) leaderboard = JSON.parse(fs.readFileSync('leaderboard.json')); };
 
 // ================= FACEIT =================
 async function getPlayer(nick) {
@@ -46,7 +49,11 @@ async function getMatchStats(matchId) {
 }
 
 // ================= HELPERS =================
-function getMention(nick) { const id = process.env[`MENTION_${nick}`]; return id ? `<@${id}>` : nick; }
+function getMention(nick) { 
+  const id = process.env[`MENTION_${nick}`]; 
+  return id ? `<@${id}>` : nick; 
+}
+
 function formatPlayerStats(players = []) {
   return players.map(p => {
     const s = p.player_stats || {};
@@ -71,7 +78,7 @@ function getTopFragger(players) {
 function getElProfesore(players) {
   const target = ["deflerix", "w4kky", "pawik"];
   let filtered = players.filter(p => target.includes(p.nickname.toLowerCase()));
-  if (!filtered.length) filtered = players; 
+  if (!filtered.length) filtered = players;
   return filtered.reduce((worst, p) => { 
     const kills = Number(p.player_stats?.Kills || 0); 
     return kills < worst.kills ? { nick: p.nickname, kills } : worst; 
@@ -90,45 +97,51 @@ function getRandomImage(isWin) {
 }
 
 // ================= MATCH =================
-async function processMatch(nick, forceSend = false, interaction = null) {
+async function processMatch(forceSend = false) {
   try {
-    const player = await getPlayer(nick);
-    const lastMatch = await getLastMatch(player.player_id);
-    if (!lastMatch) return;
-    if (checkedMatches.has(lastMatch.match_id) && !forceSend) return;
+    // Pobranie ostatnich meczy wszystkich nicków
+    const lastMatches = await Promise.all(nicknames.map(nick => getLastMatch((await getPlayer(nick)).player_id)));
+    const uniqueMatchIds = [...new Set(lastMatches.map(m => m?.match_id).filter(Boolean))];
 
-    const stats = await getMatchStats(lastMatch.match_id);  
-    const round = stats.rounds?.[0];  
-    if (!round) return;  
+    if (!uniqueMatchIds.length) return;
 
-    const ourTeam = round.teams?.find(t => t.players?.some(p => p.nickname.toLowerCase() === nick.toLowerCase()));  
-    if (!ourTeam) return;  
-    const enemyTeam = round.teams.find(t => t !== ourTeam);  
+    // Jeśli wszyscy mają ten sam mecz, wysyłamy tylko 1 raport
+    for (const matchId of uniqueMatchIds) {
+      if (checkedMatches.has(matchId) && !forceSend) continue;
 
-    const { our, enemy } = getTeamScore(round, ourTeam);  
-    const isWin = our > enemy;  
+      const stats = await getMatchStats(matchId);
+      const round = stats.rounds?.[0];  
+      if (!round) continue;
 
-    const resultText = `${isWin ? "🟢 WIN" : "🔴 LOSE"} | ${our}:${enemy}`;  
-    const top = getTopFragger(ourTeam.players);  
-    const profesore = getElProfesore(ourTeam.players);  
+      const ourTeam = round.teams?.find(t => t.players?.some(p => nicknames.map(n => n.toLowerCase()).includes(p.nickname.toLowerCase())));
+      if (!ourTeam) continue;
+      const enemyTeam = round.teams.find(t => t !== ourTeam);
 
-    let eloLines = "";  
-    for (const n of nicknames) {  
-      try {  
-        const p = await getPlayer(n);  
-        const elo = p.games?.cs2?.faceit_elo || 0;  
-        const prev = playerCache[n]?.lastElo ?? "X";  
-        eloLines += `-${n} ${prev} → ${elo}\n`;  
-        playerCache[n].lastElo = elo;  
-      } catch { eloLines += `-${n} brak danych\n`; }  
-    }  
+      const { our, enemy } = getTeamScore(round, ourTeam);  
+      const isWin = our > enemy;  
+      const resultText = `${isWin ? "🟢 WIN" : "🔴 LOSE"} | ${our}:${enemy}`;
+      const top = getTopFragger(ourTeam.players);
+      const profesore = getElProfesore(ourTeam.players);
 
-    const mentions = nicknames.map(getMention).join(' ');  
-    const image = getRandomImage(isWin);  
+      let eloLines = "";
+      for (const n of nicknames) {
+        try {
+          const p = await getPlayer(n);
+          const elo = p.games?.cs2?.faceit_elo || 0;
+          const prev = playerCache[n]?.lastElo ?? "X";
+          eloLines += `-${n} ${prev} → ${elo}\n`;
+          playerCache[n].lastElo = elo;
+        } catch { eloLines += `-${n} brak danych\n`; }
+      }
 
-    const message = `📊 Raport ${mentions}
+      const mentions = nicknames.map(getMention).join(' ');
+      const image = getRandomImage(isWin);
+      const channel = await client.channels.fetch(CHANNEL_ID);
+      if (!channel) return;
 
-📅 Data: ${new Date((lastMatch.finished_at||lastMatch.started_at||Date.now())*1000).toLocaleString('pl-PL',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'})}
+      const message = `📊 Raport ${mentions}
+
+📅 Data: ${new Date((lastMatches.find(m => m.match_id === matchId)?.finished_at||lastMatches.find(m => m.match_id === matchId)?.started_at||Date.now())*1000).toLocaleString('pl-PL',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'})}
 ${resultText}
 🌍 Mapa: ${round.round_stats.Map}
 🐐 GOAT: ${top.nick} (${top.kills})
@@ -142,15 +155,10 @@ ${formatPlayerStats(ourTeam.players)}
 📋 ENEMY:
 ${formatPlayerStats(enemyTeam?.players)}`;
 
-    if (interaction) await interaction.reply({ content: message, files: image ? [image] : [] });  
-    else {  
-      const channel = await client.channels.fetch(CHANNEL_ID);  
-      if (!channel) return;  
-      await channel.send({ content: message, files: image ? [image] : [] });  
-      checkedMatches.add(lastMatch.match_id);  
-      saveMatches();  
+      await channel.send({ content: message, files: image ? [image] : [] });
+      checkedMatches.add(matchId);
+      saveMatches();
     }
-
   } catch (err) { console.error(err.message); }
 }
 
@@ -158,37 +166,42 @@ ${formatPlayerStats(enemyTeam?.players)}`;
 client.once('ready', async () => {
   console.log(`Zalogowano jako ${client.user.tag}`);
   loadMatches();
+  loadLeaderboard();
 
-  // Tworzenie komend Slash
+  // Rejestracja komendy zmecz_zweiha i leaderboard
   const commands = [
-    new SlashCommandBuilder().setName('zmecz_zweiha').setDescription('Sprawdza ostatni mecz wszystkich graczy')
+    new SlashCommandBuilder().setName('zmecz_zweiha').setDescription('Zlicza zmeczenie Zweiha'),
+    new SlashCommandBuilder().setName('leaderboard').setDescription('Pokazuje ranking zmeczeń')
   ];
   for (const c of commands) await client.application.commands.create(c, GUILD_ID);
 
   // Cykliczne sprawdzanie meczy
-  setInterval(() => { nicknames.forEach(n => processMatch(n)); }, Number(CHECK_INTERVAL) || 180000);
+  setInterval(() => processMatch(), Number(CHECK_INTERVAL) || 180000);
 });
 
 // ================= INTERACTION =================
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
+
+  const userId = interaction.user.id;
   if (interaction.commandName === 'zmecz_zweiha') {
-    const lastMatches = await Promise.all(nicknames.map(async nick => {
-      const player = await getPlayer(nick);
-      return getLastMatch(player.player_id);
-    }));
+    leaderboard[userId] = (leaderboard[userId] || 0) + 1;
+    saveLeaderboard();
+    await interaction.reply({ content: `<@${userId}> zmeczył Zweiha 🍆 🤬` });
+  }
 
-    const matchIds = new Set(lastMatches.map(m => m?.match_id));
-    if (!matchIds.size) return;
+  if (interaction.commandName === 'leaderboard') {
+    const sorted = Object.entries(leaderboard).filter(([_, v]) => v > 0)
+      .sort((a,b) => b[1]-a[1]);
+    if (!sorted.length) return interaction.reply("Brak zmeczeń w tabeli.");
 
-    // Jeśli wszyscy mają ten sam ostatni mecz
-    const singleMatchId = matchIds.size === 1 ? lastMatches[0].match_id : null;
-    if (singleMatchId) {
-      await processMatch(nicknames[0], true, interaction);
-    } else {
-      // Wysyłaj osobno dla każdego
-      for (const nick of nicknames) await processMatch(nick, true, interaction);
-    }
+    let message = "Leaderboard:\n";
+    const emojis = ["🥇","🥈","🥉"];
+    sorted.forEach(([id, count], i) => {
+      const prefix = i < 3 ? emojis[i] : `${i+1}️⃣`;
+      message += `${prefix} <@${id}> ${count}\n`;
+    });
+    await interaction.reply({ content: message });
   }
 });
 
