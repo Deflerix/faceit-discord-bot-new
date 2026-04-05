@@ -47,7 +47,6 @@ async function getMatchStats(matchId) {
 
 // ================= HELPERS =================
 function getMention(nick) { const id = process.env[`MENTION_${nick}`]; return id ? `<@${id}>` : nick; }
-
 function formatPlayerStats(players = []) {
   return players.map(p => {
     const s = p.player_stats || {};
@@ -63,20 +62,14 @@ function getTeamScore(round, ourTeam) {
 }
 
 function getTopFragger(players) {
-  return players.reduce((best, p) => { 
-    const kills = Number(p.player_stats?.Kills || 0); 
-    return kills > best.kills ? { nick: p.nickname, kills } : best; 
-  }, { nick: "?", kills: -1 });
+  return players.reduce((best, p) => { const kills = Number(p.player_stats?.Kills || 0); return kills > best.kills ? { nick: p.nickname, kills } : best; }, { nick: "?", kills: -1 });
 }
 
 function getElProfesore(players) {
   const target = ["deflerix", "w4kky", "pawik"];
   let filtered = players.filter(p => target.includes(p.nickname.toLowerCase()));
   if (!filtered.length) filtered = players; // fallback to last player in team
-  return filtered.reduce((worst, p) => { 
-    const kills = Number(p.player_stats?.Kills || 0); 
-    return kills < worst.kills ? { nick: p.nickname, kills } : worst; 
-  }, { nick: "?", kills: Infinity });
+  return filtered.reduce((worst, p) => { const kills = Number(p.player_stats?.Kills || 0); return kills < worst.kills ? { nick: p.nickname, kills } : worst; }, { nick: "?", kills: Infinity });
 }
 
 function getRandomImage(isWin) {
@@ -157,17 +150,14 @@ ${formatPlayerStats(enemyTeam?.players)}`;
 client.once('ready', async () => {
   console.log(`Zalogowano jako ${client.user.tag}`);
   loadMatches();
-  // wysyłanie ostatniego meczu po starcie
-  for (const nick of nicknames) await processMatch(nick);
 
+  // Tworzenie komend Slash
   const commands = [
-    new SlashCommandBuilder()
-      .setName('checkmatch')
-      .setDescription('Sprawdza mecz')
-      .addStringOption(o => o.setName('nick').setRequired(true))
+    new SlashCommandBuilder().setName('checkmatch').setDescription('Sprawdza mecz').addStringOption(o => o.setName('nick').setRequired(true))
   ];
   for (const c of commands) await client.application.commands.create(c, GUILD_ID);
 
+  // Cykliczne sprawdzanie meczy
   setInterval(() => { nicknames.forEach(n => processMatch(n)); }, Number(CHECK_INTERVAL) || 180000);
 });
 
