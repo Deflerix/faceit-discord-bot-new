@@ -59,13 +59,11 @@ function getSongUrl(isWin) {
   const configured = isWin ? SONG_WIN_URL : SONG_LOSE_URL;
   const fallback = isWin ? DEFAULT_WIN_SOUND : DEFAULT_LOSE_SOUND;
   if (!configured) return fallback;
-
-  if (/youtu\.?be/i.test(configured)) {
-    console.log('[AUDIO WARN] URL z YouTube bywa niestabilny w hostingu. Używam domyślnego MP3.');
-    return fallback;
-  }
-
   return configured;
+}
+
+function isDirectAudioUrl(url) {
+  return /\.(mp3|ogg|wav|m4a)(\?.*)?$/i.test(url || '');
 }
 
 // ================= AXIOS =================
@@ -196,11 +194,31 @@ async function playMatchSong(isWin, overrideUrl = null) {
 
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       debugLog(`audio attempt=${attempt}`);
-      const stream = await play.stream(songUrl);
-      const resource = createAudioResource(stream.stream, {
-        inputType: stream.type,
-        inlineVolume: true
-      });
+      let resource;
+
+      try {
+        if (isDirectAudioUrl(songUrl)) {
+          debugLog('audio source mode=direct-http');
+          const response = await axios.get(songUrl, {
+            responseType: 'stream',
+            timeout: 20_000,
+            maxRedirects: 5
+          });
+          resource = createAudioResource(response.data, { inlineVolume: true });
+        } else {
+          debugLog('audio source mode=play-dl');
+          const stream = await play.stream(songUrl);
+          resource = createAudioResource(stream.stream, {
+            inputType: stream.type,
+            inlineVolume: true
+          });
+        }
+      } catch (sourceErr) {
+        console.error(`[AUDIO ERROR] Nie udało się pobrać źródła audio: ${sourceErr.message}`);
+        if (attempt === 2) throw sourceErr;
+        continue;
+      }
+
       if (resource.volume) resource.volume.setVolume(0.8);
       const player = createAudioPlayer();
       const startedAt = Date.now();
