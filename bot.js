@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
+const { Client, GatewayIntentBits, SlashCommandBuilder, PermissionFlagsBits, AttachmentBuilder } = require('discord.js');
 const axios = require('axios');
 const fs = require('fs');
 const express = require("express");
@@ -156,12 +156,12 @@ async function processMatch(nick, forceSend = false, interaction = null) {
     const image = getRandomImage(isWin);
 
     const message = `📊 Raport ${mentions}
+${resultText} | ${our}:${enemy}
 📅 Data: ${eventTime}
 🌍 Mapa: ${map}
-${resultText} | ${our}:${enemy}
 
-🔥 TOP: ${top.nick} (${top.kills})
-${profesore ? `🤡 PROFESORE: ${profesore.nick} (${profesore.kills})` : ""}
+🐐 GOAT: ${top.nick} (${top.kills})
+${profesore ? `🚑 PROFESORE: ${profesore.nick} (${profesore.kills})` : ""}
 
 📈 ELO:
 ${eloLines}
@@ -172,7 +172,8 @@ ${formatPlayerStats(ourTeam.players)}
 📋 ENEMY:
 ${formatPlayerStats(enemyTeam?.players)}`;
 
-    const payload = image ? { content: message, embeds: [{ image: { url: image } }] } : { content: message };
+    const payload = { content: message };
+    if (image) payload.files = [new AttachmentBuilder(image)];
 
     if (interaction) await interaction.reply(payload);
     else {
