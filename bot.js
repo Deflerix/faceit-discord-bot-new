@@ -34,12 +34,17 @@ const {
   SONG_LOSE_URL
 } = process.env;
 const nicknames = (FACEIT_NICKS || '').split(',').map(n => n.trim()).filter(Boolean);
+const DEBUG = ['1', 'true', 'yes', 'on'].includes(String(process.env.DEBUG || '').toLowerCase());
 
 let checkedMatches = new Set();
 let playerCache = {}; // cache profilu FACEIT
 let eloCache = {}; // cache ELO do porównań tick->tick
 let lastImage = null;
 let leaderboard = {};
+
+function debugLog(message) {
+  if (DEBUG) console.log(`[DEBUG] ${message}`);
+}
 
 // ================= AXIOS =================
 const api = axios.create({
@@ -59,6 +64,7 @@ const loadLeaderboard = () => {
 
 // ================= FACEIT =================
 async function getPlayer(nick, forceRefresh = false) {
+  debugLog(`getPlayer(${nick}) forceRefresh=${forceRefresh}`);
   if (!forceRefresh && playerCache[nick]) return playerCache[nick];
   const res = await api.get(`https://open.faceit.com/data/v4/players?nickname=${encodeURIComponent(nick)}`);
   playerCache[nick] = res.data;
@@ -66,11 +72,13 @@ async function getPlayer(nick, forceRefresh = false) {
 }
 
 async function getLastMatch(playerId) {
+  debugLog(`getLastMatch(${playerId})`);
   const res = await api.get(`https://open.faceit.com/data/v4/players/${playerId}/history?game=cs2&limit=1`);
   return res.data.items?.[0];
 }
 
 async function getMatchStats(matchId) {
+  debugLog(`getMatchStats(${matchId})`);
   const res = await api.get(`https://open.faceit.com/data/v4/matches/${matchId}/stats`);
   return res.data;
 }
@@ -136,6 +144,7 @@ function getRandomImage(isWin) {
 async function playMatchSong(isWin) {
   const songUrl = isWin ? SONG_WIN_URL : SONG_LOSE_URL;
   if (!VOICE_CHANNEL_ID || !songUrl) return;
+  debugLog(`playMatchSong(isWin=${isWin}) url=${songUrl}`);
 
   const voiceChannel = await client.channels.fetch(VOICE_CHANNEL_ID);
   if (!voiceChannel || !voiceChannel.isVoiceBased()) {
@@ -153,6 +162,7 @@ async function playMatchSong(isWin) {
   try {
     await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
     for (let attempt = 1; attempt <= 2; attempt += 1) {
+      debugLog(`audio attempt=${attempt}`);
       const stream = await play.stream(songUrl);
       const resource = createAudioResource(stream.stream, { inputType: stream.type });
       const player = createAudioPlayer();
@@ -182,6 +192,7 @@ async function playMatchSong(isWin) {
       console.log('[AUDIO WARN] Odtwarzanie zakończyło się za szybko, ponawiam próbę...');
     }
   } finally {
+    debugLog('audio disconnect');
     connection.destroy();
   }
 }
@@ -196,6 +207,7 @@ function warnAudioConfig() {
 // ================= MATCH =================
 async function processMatch(forceSend = false) {
   try {
+    debugLog(`processMatch(forceSend=${forceSend})`);
     if (!nicknames.length) return;
 
     // Pobranie ostatnich meczów wszystkich nicków.
@@ -207,12 +219,14 @@ async function processMatch(forceSend = false) {
     );
 
     const uniqueMatchIds = [...new Set(lastMatches.map(m => m?.match_id).filter(Boolean))];
+    debugLog(`uniqueMatchIds=${JSON.stringify(uniqueMatchIds)}`);
     if (!uniqueMatchIds.length) return;
 
     const channel = await client.channels.fetch(CHANNEL_ID);
     if (!channel || !channel.isTextBased()) return;
 
     for (const matchId of uniqueMatchIds) {
+      debugLog(`processing matchId=${matchId}`);
       if (checkedMatches.has(matchId) && !forceSend) continue;
 
       const stats = await getMatchStats(matchId);
@@ -275,15 +289,18 @@ async function processMatch(forceSend = false) {
         content: message,
         embeds: [statsEmbed]
       });
+      debugLog(`match report sent for ${matchId}`);
 
       if (image) {
         await channel.send({ files: [image] });
+        debugLog(`image sent for ${matchId}`);
       }
 
       // Oznacz mecz jako wysłany ZANIM odpalimy audio, żeby błąd muzyki nie powodował
       // ponownego wysyłania tego samego raportu w kolejnych tickach.
       checkedMatches.add(matchId);
       saveMatches();
+      debugLog(`match persisted ${matchId}`);
 
       try {
         await playMatchSong(isWin);
