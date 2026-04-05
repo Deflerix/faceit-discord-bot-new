@@ -46,7 +46,10 @@ async function getMatchStats(matchId) {
 }
 
 // ================= HELPERS =================
-function getMention(nick) { const id = process.env[`MENTION_${nick}`]; return id ? `<@${id}>` : nick; }
+function getMention(nick) { 
+    const id = process.env[`MENTION_${nick}`]; 
+    return id ? `<@${id}>` : nick; 
+}
 
 function formatPlayerStats(players = []) {
     return players.map(p => {
@@ -72,7 +75,7 @@ function getTopFragger(players) {
 function getElProfesore(players) {
     const target = ["deflerix", "w4kky", "pawik"];
     let filtered = players.filter(p => target.includes(p.nickname.toLowerCase()));
-    if (!filtered.length) filtered = players;
+    if (!filtered.length) filtered = players; // fallback
     return filtered.reduce((worst, p) => { 
         const kills = Number(p.player_stats?.Kills || 0); 
         return kills < worst.kills ? { nick: p.nickname, kills } : worst; 
@@ -148,6 +151,7 @@ ${formatPlayerStats(enemyTeam?.players)}`;
             const channel = await client.channels.fetch(CHANNEL_ID);  
             if (!channel) return;  
             await channel.send({ content: message, files: image ? [image] : [] });  
+            // Tutaj oznaczamy mecz jako wysłany
             checkedMatches.add(lastMatch.match_id);  
             saveMatches();  
         }
@@ -164,26 +168,21 @@ client.once('ready', async () => {
     const commands = [
         new SlashCommandBuilder()
             .setName('checkmatch')
-            .setDescription('Sprawdza mecz')
-            .addStringOption(o => o.setName('nick').setRequired(true))
+            .setDescription('Sprawdza mecz') // zawsze string
+            .addStringOption(option => 
+                option.setName('nick')
+                      .setDescription('Nick gracza do sprawdzenia')
+                      .setRequired(true)
+            )
     ];
     for (const c of commands) await client.application.commands.create(c, GUILD_ID);
 
-    // ===== Wyślij pierwszy mecz przy starcie i oznacz jako wysłany =====
-    for (const nick of nicknames) {
-        try {
-            const player = await getPlayer(nick);
-            const lastMatch = await getLastMatch(player.player_id);
-            if (!lastMatch) continue;
-            if (!checkedMatches.has(lastMatch.match_id)) {
-                await processMatch(nick, true); // forceSend = true
-                checkedMatches.add(lastMatch.match_id);
-                saveMatches();
-            }
-        } catch (err) { console.error(err.message); }
+    // ================= WYSYŁKA MECZU PRZY STARCI BOTA =================
+    for (const n of nicknames) {
+        await processMatch(n, true);
     }
 
-    // Cykliczne sprawdzanie meczy
+    // ================= CYKLICZNE SPRAWDZANIE =================
     setInterval(() => { nicknames.forEach(n => processMatch(n)); }, Number(CHECK_INTERVAL) || 180000);
 });
 
