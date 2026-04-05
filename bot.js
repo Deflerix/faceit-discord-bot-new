@@ -71,7 +71,7 @@ function getTopFragger(players) {
 function getElProfesore(players) {
   const target = ["deflerix", "w4kky", "pawik"];
   let filtered = players.filter(p => target.includes(p.nickname.toLowerCase()));
-  if (!filtered.length) filtered = players;
+  if (!filtered.length) filtered = players; 
   return filtered.reduce((worst, p) => { 
     const kills = Number(p.player_stats?.Kills || 0); 
     return kills < worst.kills ? { nick: p.nickname, kills } : worst; 
@@ -159,29 +159,29 @@ client.once('ready', async () => {
   console.log(`Zalogowano jako ${client.user.tag}`);
   loadMatches();
 
-  // Tworzenie komendy zmecz_zweiha
+  // Tworzenie komend Slash
   const commands = [
-    new SlashCommandBuilder().setName('zmecz_zweiha').setDescription('Sprawdza ostatni mecz wszystkich nicków')
+    new SlashCommandBuilder().setName('zmecz_zweiha').setDescription('Sprawdza ostatni mecz wszystkich graczy')
   ];
   for (const c of commands) await client.application.commands.create(c, GUILD_ID);
 
   // Cykliczne sprawdzanie meczy
   setInterval(() => { nicknames.forEach(n => processMatch(n)); }, Number(CHECK_INTERVAL) || 180000);
-
-  // Sprawdzenie ostatnich meczów od razu po starcie
-  for (const n of nicknames) await processMatch(n);
 });
 
 // ================= INTERACTION =================
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
   if (interaction.commandName === 'zmecz_zweiha') {
-    // Sprawdza ostatni mecz dla wszystkich nicków i wysyła tylko jeden raport
-    const lastMatches = await Promise.all(nicknames.map(nick => getLastMatch((await getPlayer(nick)).player_id)));
+    const lastMatches = await Promise.all(nicknames.map(async nick => {
+      const player = await getPlayer(nick);
+      return getLastMatch(player.player_id);
+    }));
+
     const matchIds = new Set(lastMatches.map(m => m?.match_id));
     if (!matchIds.size) return;
 
-    // Jeśli wszystkie mają ten sam ostatni mecz
+    // Jeśli wszyscy mają ten sam ostatni mecz
     const singleMatchId = matchIds.size === 1 ? lastMatches[0].match_id : null;
     if (singleMatchId) {
       await processMatch(nicknames[0], true, interaction);
