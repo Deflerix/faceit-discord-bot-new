@@ -5,6 +5,7 @@ const fs = require('fs');
 const express = require('express');
 const {
   AudioPlayerStatus,
+  NoSubscriberBehavior,
   StreamType,
   VoiceConnectionStatus,
   createAudioPlayer,
@@ -70,7 +71,11 @@ function isDirectAudioUrl(url) {
 
 async function playFallbackTone(connection) {
   console.log('[AUDIO WARN] Uruchamiam awaryjny test tone (ffmpeg sine).');
-  const player = createAudioPlayer();
+  const player = createAudioPlayer({
+    behaviors: {
+      noSubscriber: NoSubscriberBehavior.Play
+    }
+  });
   const ffmpeg = spawn(process.env.FFMPEG_PATH || ffmpegPath, [
     '-f', 'lavfi',
     '-i', 'sine=frequency=880:duration=3',
@@ -256,7 +261,11 @@ async function playMatchSong(isWin, overrideUrl = null, overrideVoiceChannelId =
       let playedMs = 0;
       try {
         if (resource.volume) resource.volume.setVolume(0.8);
-        const player = createAudioPlayer();
+        const player = createAudioPlayer({
+          behaviors: {
+            noSubscriber: NoSubscriberBehavior.Play
+          }
+        });
         const startedAt = Date.now();
 
         connection.subscribe(player);
