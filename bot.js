@@ -152,26 +152,35 @@ async function playMatchSong(isWin) {
 
   try {
     await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      const stream = await play.stream(songUrl);
+      const resource = createAudioResource(stream.stream, { inputType: stream.type });
+      const player = createAudioPlayer();
+      const startedAt = Date.now();
 
-    const stream = await play.stream(songUrl);
-    const resource = createAudioResource(stream.stream, { inputType: stream.type });
-    const player = createAudioPlayer();
+      connection.subscribe(player);
+      player.play(resource);
+      await entersState(player, AudioPlayerStatus.Playing, 20_000);
 
-    connection.subscribe(player);
-    player.play(resource);
+      const playedMs = await new Promise(resolve => {
+        const hardTimeout = setTimeout(() => resolve(Date.now() - startedAt), 180_000);
 
-    await new Promise(resolve => {
-      const hardTimeout = setTimeout(resolve, 90_000);
-      player.on(AudioPlayerStatus.Idle, () => {
-        clearTimeout(hardTimeout);
-        resolve();
+        player.on(AudioPlayerStatus.Idle, () => {
+          clearTimeout(hardTimeout);
+          resolve(Date.now() - startedAt);
+        });
+
+        player.on('error', err => {
+          console.error(`[AUDIO ERROR] ${err.message}`);
+          clearTimeout(hardTimeout);
+          resolve(Date.now() - startedAt);
+        });
       });
-      player.on('error', err => {
-        console.error(`[AUDIO ERROR] ${err.message}`);
-        clearTimeout(hardTimeout);
-        resolve();
-      });
-    });
+
+      // Jeśli utwór zakończył się podejrzanie szybko (np. 3-5s), spróbuj raz jeszcze.
+      if (playedMs >= 8_000 || attempt === 2) break;
+      console.log('[AUDIO WARN] Odtwarzanie zakończyło się za szybko, ponawiam próbę...');
+    }
   } finally {
     connection.destroy();
   }
