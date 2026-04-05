@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, SlashCommandBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const axios = require('axios');
 const fs = require('fs');
 const express = require('express');
@@ -183,9 +183,21 @@ async function processMatch(forceSend = false) {
       });
 
       const mapName = round.round_stats?.Map || '-';
-      const message = `📊 Raport ${mentions}\n\n📅 Data: ${dateText}\n${resultText}\n🌍 Mapa: ${mapName}\n🐐 GOAT: ${top.nick} (${top.kills})\n🚑 PROFESORE: ${profesore.nick} (${profesore.kills})\n\n📈 ELO:\n${eloLines}\n📋 OUR:\n${formatPlayerStats(ourTeam.players)}\n\n📋 ENEMY:\n${formatPlayerStats(enemyTeam.players)}`;
+      const message = `📊 Raport ${mentions}\n📅 Data: ${dateText}\n${resultText}\n🌍 Mapa: ${mapName}\n🐐 GOAT: ${top.nick} (${top.kills})\n🚑 PROFESORE: ${profesore.nick} (${profesore.kills})\n\n📈 ELO:\n${eloLines}`;
 
-      await channel.send({ content: message, files: image ? [image] : [] });
+      const statsEmbed = new EmbedBuilder()
+        .setColor(isWin ? 0x2ecc71 : 0xe74c3c)
+        .setTitle('📋 Statystyki meczu')
+        .addFields(
+          { name: 'OUR', value: `\`\`\`\n${formatPlayerStats(ourTeam.players)}\n\`\`\`` },
+          { name: 'ENEMY', value: `\`\`\`\n${formatPlayerStats(enemyTeam.players)}\n\`\`\`` }
+        );
+
+      await channel.send({
+        content: message,
+        embeds: [statsEmbed],
+        files: image ? [image] : []
+      });
       checkedMatches.add(matchId);
       saveMatches();
     }
