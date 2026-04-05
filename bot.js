@@ -69,10 +69,9 @@ function formatPlayerStats(players = []) {
     const kills = s.Kills ?? '-';
     const deaths = s.Deaths ?? '-';
     const hs = s['Headshots %'] ?? '-';
-    const adr = s['Average Damage per Round'] ?? '-';
     const nick = (p.nickname || '?').slice(0, 12);
 
-    return `${nick.padEnd(12)} | ${kills}/${deaths} | KD:${kd.toFixed(2)} | HS:${hs} | ADR:${adr}`;
+    return `${nick.padEnd(12)} | ${kills}/${deaths} | KD:${kd.toFixed(2)} | HS:${hs}`;
   }).join('\n');
 }
 
@@ -195,9 +194,12 @@ async function processMatch(forceSend = false) {
 
       await channel.send({
         content: message,
-        embeds: [statsEmbed],
-        files: image ? [image] : []
+        embeds: [statsEmbed]
       });
+
+      if (image) {
+        await channel.send({ files: [image] });
+      }
       checkedMatches.add(matchId);
       saveMatches();
     }
