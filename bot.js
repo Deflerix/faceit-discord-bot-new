@@ -9,9 +9,11 @@ const {
   createAudioPlayer,
   createAudioResource,
   entersState,
+  generateDependencyReport,
   joinVoiceChannel
 } = require('@discordjs/voice');
 const play = require('play-dl');
+const ffmpegPath = require('ffmpeg-static');
 
 // ================= KEEP ALIVE =================
 const app = express();
@@ -46,6 +48,11 @@ let leaderboard = {};
 
 function debugLog(message) {
   if (DEBUG) console.log(`[DEBUG] ${message}`);
+}
+
+if (ffmpegPath && !process.env.FFMPEG_PATH) {
+  process.env.FFMPEG_PATH = ffmpegPath;
+  debugLog(`Ustawiono FFMPEG_PATH=${ffmpegPath}`);
 }
 
 function getSongUrl(isWin) {
@@ -221,6 +228,10 @@ function warnAudioConfig() {
   if (!VOICE_CHANNEL_ID) console.log('[INFO] Brak VOICE_CHANNEL_ID - audio po meczu wyłączone.');
   if (!SONG_WIN_URL || !SONG_LOSE_URL) {
     console.log('[INFO] Brak SONG_WIN_URL lub SONG_LOSE_URL - użyte będą domyślne krótkie MP3.');
+  }
+  if (DEBUG) {
+    console.log('[DEBUG] @discordjs/voice dependency report:');
+    console.log(generateDependencyReport());
   }
 }
 
