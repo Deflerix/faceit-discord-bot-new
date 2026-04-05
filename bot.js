@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const { ChannelType, Client, GatewayIntentBits, SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const axios = require('axios');
 const fs = require('fs');
 const express = require('express');
@@ -173,6 +173,9 @@ async function playMatchSong(isWin) {
     console.log('[WARN] VOICE_CHANNEL_ID nie wskazuje kanału głosowego.');
     return;
   }
+  const me = voiceChannel.guild.members.me;
+  const perms = voiceChannel.permissionsFor(me);
+  debugLog(`voice perms connect=${perms?.has('Connect')} speak=${perms?.has('Speak')}`);
 
   const connection = joinVoiceChannel({
     channelId: voiceChannel.id,
@@ -184,6 +187,13 @@ async function playMatchSong(isWin) {
 
   try {
     await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
+    if (voiceChannel.type === ChannelType.GuildStageVoice && me?.voice) {
+      // Stage channel: bot może być domyślnie "suppressed", więc nic nie słychać.
+      await me.voice.setRequestToSpeak(true).catch(() => {});
+      await me.voice.setSuppressed(false).catch(() => {});
+      debugLog('stage voice: requested to speak / unsuppressed');
+    }
+
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       debugLog(`audio attempt=${attempt}`);
       const stream = await play.stream(songUrl);
