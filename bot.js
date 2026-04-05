@@ -108,20 +108,30 @@ function getRandomImage(isWin) {
 // ================= MATCH =================
 async function processMatch(nick, forceSend = false, interaction = null) {
   try {
+    console.log(`Sprawdzam mecz dla ${nick}...`);
     const player = await getPlayer(nick);
     const lastMatch = await getLastMatch(player.player_id);
-    if (!lastMatch) return;
+    if (!lastMatch) {
+      console.log(`${nick} nie ma ostatniego meczu.`);
+      return;
+    }
 
     if (checkedMatches.has(lastMatch.match_id) && !forceSend) return;
 
     const stats = await getMatchStats(lastMatch.match_id);
     const round = stats.rounds?.[0];
-    if (!round) return;
+    if (!round) {
+      console.log(`${nick} brak rund w meczu ${lastMatch.match_id}.`);
+      return;
+    }
 
     const ourTeam = round.teams?.find(t =>
       t.players?.some(p => p.nickname.toLowerCase() === nick.toLowerCase())
     );
-    if (!ourTeam) return;
+    if (!ourTeam) {
+      console.log(`${nick} nie znalazł swojej drużyny w meczu ${lastMatch.match_id}.`);
+      return;
+    }
 
     const enemyTeam = round.teams?.find(t => t !== ourTeam);
     const { our, enemy } = getTeamScore(round, ourTeam);
@@ -185,7 +195,7 @@ ${formatPlayerStats(enemyTeam?.players)}`;
     }
 
   } catch (err) {
-    console.error("Błąd w processMatch:", err.message);
+    console.error("Błąd w processMatch:", err);
   }
 }
 
@@ -215,11 +225,15 @@ client.once('ready', async () => {
       .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
   ];
 
-  for (const c of commands) {
-    try { await client.application.commands.create(c, GUILD_ID); }
-    catch(err){ console.error('Błąd przy tworzeniu komendy:', err.message); }
+  // Poprawna rejestracja wszystkich komend
+  try {
+    await client.application.commands.set(commands.map(c => c.toJSON()), GUILD_ID);
+    console.log("Komendy zarejestrowane.");
+  } catch (err) {
+    console.error("Błąd przy rejestracji komend:", err.message);
   }
 
+  // Auto check
   setInterval(async () => { for (const n of nicknames) await processMatch(n); }, Number(CHECK_INTERVAL) || 180000);
 });
 
