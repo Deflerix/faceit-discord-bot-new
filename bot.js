@@ -22,7 +22,7 @@ const {
   GUILD_ID,
   MUSIC_BOT_CHANNEL_ID
 } = process.env;
-const AUTO_MUSIC_COMMAND = process.env.AUTO_MUSIC_COMMAND || '/play freed from desire';
+const AUTO_MUSIC_COMMAND = process.env.AUTO_MUSIC_COMMAND || '!play freed from desire';
 const nicknames = (FACEIT_NICKS || '').split(',').map(n => n.trim()).filter(Boolean);
 
 let checkedMatches = new Set();
@@ -123,6 +123,15 @@ function getRandomImage(isWin) {
   return selected;
 }
 
+function normalizeMusicCommand(command) {
+  const raw = (command || '').trim();
+  if (!raw) return '';
+  // Slash-komend innego bota nie da się wywołać zwykłą wiadomością tekstową.
+  // Jeśli ktoś poda "/play ...", zamieniamy na prefiksową wersję "!play ...".
+  if (raw.startsWith('/')) return `!${raw.slice(1)}`;
+  return raw;
+}
+
 // ================= MATCH =================
 async function processMatch(forceSend = false) {
   try {
@@ -213,7 +222,10 @@ async function processMatch(forceSend = false) {
       if (MUSIC_BOT_CHANNEL_ID) {
         const musicChannel = await client.channels.fetch(MUSIC_BOT_CHANNEL_ID);
         if (musicChannel && musicChannel.isTextBased()) {
-          await musicChannel.send(AUTO_MUSIC_COMMAND);
+          const musicCommand = normalizeMusicCommand(AUTO_MUSIC_COMMAND);
+          if (musicCommand) {
+            await musicChannel.send(musicCommand);
+          }
         }
       }
       checkedMatches.add(matchId);
