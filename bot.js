@@ -47,11 +47,12 @@ async function getMatchStats(matchId) {
 
 // ================= HELPERS =================
 function getMention(nick) { const id = process.env[`MENTION_${nick}`]; return id ? `<@${id}>` : nick; }
+
 function formatPlayerStats(players = []) {
     return players.map(p => {
         const s = p.player_stats || {};
         const kd = Number(s["K/D Ratio"]) || 0;
-        return `\`${p.nickname.padEnd(12)} | ${s.Kills||0}/${s.Deaths||0} | ${kd.toFixed(2)} | HS:${s["Headshots %"]||"-"}\``;
+        return `${p.nickname.padEnd(12)} | ${s.Kills||0}/${s.Deaths||0} | ${kd.toFixed(2)} | HS:${s["Headshots %"]||"-"}`;
     }).join("\n");
 }
 
@@ -62,14 +63,20 @@ function getTeamScore(round, ourTeam) {
 }
 
 function getTopFragger(players) {
-    return players.reduce((best, p) => { const kills = Number(p.player_stats?.Kills || 0); return kills > best.kills ? { nick: p.nickname, kills } : best; }, { nick: "?", kills: -1 });
+    return players.reduce((best, p) => { 
+        const kills = Number(p.player_stats?.Kills || 0); 
+        return kills > best.kills ? { nick: p.nickname, kills } : best; 
+    }, { nick: "?", kills: -1 });
 }
 
 function getElProfesore(players) {
     const target = ["deflerix", "w4kky", "pawik"];
     let filtered = players.filter(p => target.includes(p.nickname.toLowerCase()));
-    if (!filtered.length) filtered = players; // fallback to last player in team
-    return filtered.reduce((worst, p) => { const kills = Number(p.player_stats?.Kills || 0); return kills < worst.kills ? { nick: p.nickname, kills } : worst; }, { nick: "?", kills: Infinity });
+    if (!filtered.length) filtered = players;
+    return filtered.reduce((worst, p) => { 
+        const kills = Number(p.player_stats?.Kills || 0); 
+        return kills < worst.kills ? { nick: p.nickname, kills } : worst; 
+    }, { nick: "?", kills: Infinity });
 }
 
 function getRandomImage(isWin) {
@@ -91,34 +98,34 @@ async function processMatch(nick, forceSend = false, interaction = null) {
         if (!lastMatch) return;
         if (checkedMatches.has(lastMatch.match_id) && !forceSend) return;
 
-        const stats = await getMatchStats(lastMatch.match_id);
-        const round = stats.rounds?.[0];
-        if (!round) return;
+        const stats = await getMatchStats(lastMatch.match_id);  
+        const round = stats.rounds?.[0];  
+        if (!round) return;  
 
-        const ourTeam = round.teams?.find(t => t.players?.some(p => p.nickname.toLowerCase() === nick.toLowerCase()));
-        if (!ourTeam) return;
-        const enemyTeam = round.teams.find(t => t !== ourTeam);
+        const ourTeam = round.teams?.find(t => t.players?.some(p => p.nickname.toLowerCase() === nick.toLowerCase()));  
+        if (!ourTeam) return;  
+        const enemyTeam = round.teams.find(t => t !== ourTeam);  
 
-        const { our, enemy } = getTeamScore(round, ourTeam);
-        const isWin = our > enemy;
+        const { our, enemy } = getTeamScore(round, ourTeam);  
+        const isWin = our > enemy;  
 
-        const resultText = `${isWin ? "🟢 WIN" : "🔴 LOSE"} | ${our}:${enemy}`;
-        const top = getTopFragger(ourTeam.players);
-        const profesore = getElProfesore(ourTeam.players);
+        const resultText = `${isWin ? "🟢 WIN" : "🔴 LOSE"} | ${our}:${enemy}`;  
+        const top = getTopFragger(ourTeam.players);  
+        const profesore = getElProfesore(ourTeam.players);  
 
-        let eloLines = "";
-        for (const n of nicknames) {
-            try {
-                const p = await getPlayer(n);
-                const elo = p.games?.cs2?.faceit_elo || 0;
-                const prev = playerCache[n]?.lastElo ?? "X";
-                eloLines += `-${n} ${prev} → ${elo}\n`;
-                playerCache[n].lastElo = elo;
-            } catch { eloLines += `-${n} brak danych\n`; }
-        }
+        let eloLines = "";  
+        for (const n of nicknames) {  
+            try {  
+                const p = await getPlayer(n);  
+                const elo = p.games?.cs2?.faceit_elo || 0;  
+                const prev = playerCache[n]?.lastElo ?? "X";  
+                eloLines += `-${n} ${prev} → ${elo}\n`;  
+                playerCache[n].lastElo = elo;  
+            } catch { eloLines += `-${n} brak danych\n`; }  
+        }  
 
-        const mentions = nicknames.map(getMention).join(' ');
-        const image = getRandomImage(isWin);
+        const mentions = nicknames.map(getMention).join(' ');  
+        const image = getRandomImage(isWin);  
 
         const message = `📊 Raport ${mentions}
 
@@ -136,13 +143,13 @@ ${formatPlayerStats(ourTeam.players)}
 📋 ENEMY:
 ${formatPlayerStats(enemyTeam?.players)}`;
 
-        if (interaction) await interaction.reply({ content: message, files: image ? [image] : [] });
-        else {
-            const channel = await client.channels.fetch(CHANNEL_ID);
-            if (!channel) return;
-            await channel.send({ content: message, files: image ? [image] : [] });
-            checkedMatches.add(lastMatch.match_id);
-            saveMatches();
+        if (interaction) await interaction.reply({ content: message, files: image ? [image] : [] });  
+        else {  
+            const channel = await client.channels.fetch(CHANNEL_ID);  
+            if (!channel) return;  
+            await channel.send({ content: message, files: image ? [image] : [] });  
+            checkedMatches.add(lastMatch.match_id);  
+            saveMatches();  
         }
 
     } catch (err) { console.error(err.message); }
@@ -155,11 +162,28 @@ client.once('ready', async () => {
 
     // Tworzenie komend Slash
     const commands = [
-        new SlashCommandBuilder().setName('checkmatch').setDescription('Sprawdza mecz').addStringOption(o => o.setName('nick').setRequired(true))
+        new SlashCommandBuilder()
+            .setName('checkmatch')
+            .setDescription('Sprawdza mecz')
+            .addStringOption(o => o.setName('nick').setRequired(true))
     ];
     for (const c of commands) await client.application.commands.create(c, GUILD_ID);
 
-    // Cykliczne sprawdzanie meczy (bez natychmiastowego wywołania meczu)
+    // ===== Wyślij pierwszy mecz przy starcie i oznacz jako wysłany =====
+    for (const nick of nicknames) {
+        try {
+            const player = await getPlayer(nick);
+            const lastMatch = await getLastMatch(player.player_id);
+            if (!lastMatch) continue;
+            if (!checkedMatches.has(lastMatch.match_id)) {
+                await processMatch(nick, true); // forceSend = true
+                checkedMatches.add(lastMatch.match_id);
+                saveMatches();
+            }
+        } catch (err) { console.error(err.message); }
+    }
+
+    // Cykliczne sprawdzanie meczy
     setInterval(() => { nicknames.forEach(n => processMatch(n)); }, Number(CHECK_INTERVAL) || 180000);
 });
 
