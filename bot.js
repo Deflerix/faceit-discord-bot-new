@@ -192,16 +192,17 @@ function getRandomImage(isWin) {
   return selected;
 }
 
-async function playMatchSong(isWin, overrideUrl = null) {
+async function playMatchSong(isWin, overrideUrl = null, overrideVoiceChannelId = null) {
   const songUrl = overrideUrl || getSongUrl(isWin);
-  if (!VOICE_CHANNEL_ID || !songUrl) return false;
-  debugLog(`playMatchSong(isWin=${isWin}) url=${songUrl}`);
+  const targetVoiceChannelId = overrideVoiceChannelId || VOICE_CHANNEL_ID;
+  if (!targetVoiceChannelId || !songUrl) return false;
+  debugLog(`playMatchSong(isWin=${isWin}) url=${songUrl} voiceChannel=${targetVoiceChannelId}`);
 
   let connection = null;
   try {
-    const voiceChannel = await client.channels.fetch(VOICE_CHANNEL_ID);
+    const voiceChannel = await client.channels.fetch(targetVoiceChannelId);
     if (!voiceChannel || !voiceChannel.isVoiceBased()) {
-      console.log('[WARN] VOICE_CHANNEL_ID nie wskazuje kanału głosowego.');
+      console.log(`[WARN] Kanał głosowy nieprawidłowy: ${targetVoiceChannelId}`);
       return false;
     }
     const me = voiceChannel.guild.members.me;
@@ -491,15 +492,20 @@ client.on('interactionCreate', async interaction => {
   if (interaction.commandName === 'testaudio') {
     const typ = interaction.options.getString('typ', true);
     const customUrl = interaction.options.getString('url');
+    const memberVoiceChannelId = interaction.member?.voice?.channelId || null;
+    const resolvedChannelId = memberVoiceChannelId || VOICE_CHANNEL_ID || null;
 
-    await interaction.reply({ content: `🔊 Test audio: ${typ}${customUrl ? ' (custom URL)' : ''}`, ephemeral: true });
+    await interaction.reply({
+      content: `🔊 Test audio: ${typ}${customUrl ? ' (custom URL)' : ''}\n🎤 Kanał: ${resolvedChannelId || 'brak'}`,
+      ephemeral: true
+    });
 
     try {
-      const ok = await playMatchSong(typ === 'win', customUrl || null);
+      const ok = await playMatchSong(typ === 'win', customUrl || null, resolvedChannelId);
       if (ok) {
         await interaction.followUp({ content: '✅ Test audio zakończony (sprawdź kanał głosowy).', ephemeral: true });
       } else {
-        await interaction.followUp({ content: '⚠️ Audio nie wystartowało. Sprawdź uprawnienia Speak/Connect i VOICE_CHANNEL_ID.', ephemeral: true });
+        await interaction.followUp({ content: '⚠️ Audio nie wystartowało. Wejdź na kanał voice i odpal /testaudio ponownie albo popraw VOICE_CHANNEL_ID.', ephemeral: true });
       }
     } catch (err) {
       await interaction.followUp({ content: `❌ Błąd audio (unexpected): ${err.message}`, ephemeral: true });
