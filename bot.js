@@ -46,10 +46,7 @@ async function getMatchStats(matchId) {
 }
 
 // ================= HELPERS =================
-function getMention(nick) { 
-    const id = process.env[`MENTION_${nick}`]; 
-    return id ? `<@${id}>` : nick; 
-}
+function getMention(nick) { const id = process.env[`MENTION_${nick}`]; return id ? `<@${id}>` : nick; }
 
 function formatPlayerStats(players = []) {
     return players.map(p => {
@@ -66,20 +63,14 @@ function getTeamScore(round, ourTeam) {
 }
 
 function getTopFragger(players) {
-    return players.reduce((best, p) => { 
-        const kills = Number(p.player_stats?.Kills || 0); 
-        return kills > best.kills ? { nick: p.nickname, kills } : best; 
-    }, { nick: "?", kills: -1 });
+    return players.reduce((best, p) => { const kills = Number(p.player_stats?.Kills || 0); return kills > best.kills ? { nick: p.nickname, kills } : best; }, { nick: "?", kills: -1 });
 }
 
 function getElProfesore(players) {
     const target = ["deflerix", "w4kky", "pawik"];
     let filtered = players.filter(p => target.includes(p.nickname.toLowerCase()));
-    if (!filtered.length) filtered = players; // fallback
-    return filtered.reduce((worst, p) => { 
-        const kills = Number(p.player_stats?.Kills || 0); 
-        return kills < worst.kills ? { nick: p.nickname, kills } : worst; 
-    }, { nick: "?", kills: Infinity });
+    if (!filtered.length) filtered = players;
+    return filtered.reduce((worst, p) => { const kills = Number(p.player_stats?.Kills || 0); return kills < worst.kills ? { nick: p.nickname, kills } : worst; }, { nick: "?", kills: Infinity });
 }
 
 function getRandomImage(isWin) {
@@ -151,7 +142,6 @@ ${formatPlayerStats(enemyTeam?.players)}`;
             const channel = await client.channels.fetch(CHANNEL_ID);  
             if (!channel) return;  
             await channel.send({ content: message, files: image ? [image] : [] });  
-            // Tutaj oznaczamy mecz jako wysłany
             checkedMatches.add(lastMatch.match_id);  
             saveMatches();  
         }
@@ -166,23 +156,25 @@ client.once('ready', async () => {
 
     // Tworzenie komend Slash
     const commands = [
-        new SlashCommandBuilder()
-            .setName('checkmatch')
-            .setDescription('Sprawdza mecz') // zawsze string
-            .addStringOption(option => 
-                option.setName('nick')
-                      .setDescription('Nick gracza do sprawdzenia')
-                      .setRequired(true)
-            )
+        new SlashCommandBuilder().setName('checkmatch').setDescription('Sprawdza mecz').addStringOption(o => o.setName('nick').setRequired(true))
     ];
     for (const c of commands) await client.application.commands.create(c, GUILD_ID);
 
-    // ================= WYSYŁKA MECZU PRZY STARCI BOTA =================
-    for (const n of nicknames) {
-        await processMatch(n, true);
-    }
+    // ================= SEND STARTUP REPORT =================
+    try {
+        const lastMatches = await Promise.all(nicknames.map(nick => getLastMatch((await getPlayer(nick)).player_id)));
+        const uniqueMatchIds = [...new Set(lastMatches.map(m => m?.match_id).filter(Boolean))];
 
-    // ================= CYKLICZNE SPRAWDZANIE =================
+        if (uniqueMatchIds.length === 1) {
+            // Wszyscy mają ten sam mecz → wysyłamy jeden raport
+            await processMatch(nicknames[0], true);
+        } else {
+            // Różne mecze → wysyłamy osobno
+            for (const n of nicknames) await processMatch(n, true);
+        }
+    } catch (err) { console.error(err); }
+
+    // Cykliczne sprawdzanie meczy
     setInterval(() => { nicknames.forEach(n => processMatch(n)); }, Number(CHECK_INTERVAL) || 180000);
 });
 
