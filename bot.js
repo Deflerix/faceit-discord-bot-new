@@ -1,4 +1,31 @@
-require('dotenv').config();
+// ================= DEBUG ŚRODOWISKA =================
+console.log("=== ROZPOCZYNAM URUCHOMIENIE BOTA NA RENDER ===");
+console.log("Node version:", process.version);
+console.log("NODE_ENV:", process.env.NODE_ENV);
+console.log("PORT:", process.env.PORT);
+
+const criticalVars = {
+  DISCORD_TOKEN: process.env.DISCORD_TOKEN ? `✅ ISTNIEJE (${process.env.DISCORD_TOKEN.length} znaków)` : "❌ BRAK - BOT NIE DZIAŁA",
+  FACEIT_API_KEY: process.env.FACEIT_API_KEY ? "✅ ISTNIEJE" : "❌ BRAK",
+  CHANNEL_ID: process.env.CHANNEL_ID || "❌ BRAK",
+  FACEIT_NICKS: process.env.FACEIT_NICKS || "❌ BRAK",
+  GUILD_ID: process.env.GUILD_ID || "nie ustawione"
+};
+
+console.table(criticalVars);
+
+if (!process.env.DISCORD_TOKEN) {
+  console.error("❌ KRRYTYCZNY BŁĄD: Brak DISCORD_TOKEN! Bot nie może się zalogować.");
+  console.error("Sprawdź panel Render → Environment");
+}
+
+// Tylko lokalnie wczytujemy .env
+if (process.env.NODE_ENV !== 'production') {
+  require('dotenv').config();
+  console.log("✅ dotenv wczytany lokalnie");
+} else {
+  console.log("Produkcja - dotenv pominięty (Render dostarcza zmienne bezpośrednio)");
+}
 const { Client, GatewayIntentBits, SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const axios = require('axios');
 const fs = require('fs');
