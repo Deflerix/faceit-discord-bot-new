@@ -495,7 +495,18 @@ client.once('clientReady', async () => {
       )
   ];
 
-  for (const c of commands) await client.application.commands.create(c, GUILD_ID);
+  try {
+    const commandPayload = commands.map(c => c.toJSON());
+    if (GUILD_ID) {
+      await client.application.commands.set(commandPayload, GUILD_ID);
+      console.log(`[INFO] Slash commands zarejestrowane dla guild ${GUILD_ID}`);
+    } else {
+      await client.application.commands.set(commandPayload);
+      console.log('[INFO] Slash commands zarejestrowane globalnie (propagacja może potrwać).');
+    }
+  } catch (commandErr) {
+    console.error(`[ERROR] Rejestracja slash commands nie powiodła się: ${commandErr.message}`);
+  }
 
   setInterval(() => processMatch(), Number(CHECK_INTERVAL) || 180000);
 });
