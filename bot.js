@@ -282,4 +282,22 @@ client.on('interactionCreate', async interaction => {
   }
 });
 
-client.login(DISCORD_TOKEN);
+client.login(DISCORD_TOKEN)
+  .then(() => {
+    console.log("✅ client.login() zakończone pomyślnie – czekam na ready...");
+  })
+  .catch(err => {
+    console.error("❌ BŁĄD LOGOWANIA:", err.message);
+    if (err.message.includes("disallowed intent") || err.message.includes("401")) {
+      console.error("→ Sprawdź Intents w Discord Developer Portal lub czy token jest poprawny");
+    }
+  });
+
+// Dodaj też globalny handler błędów
+process.on('unhandledRejection', error => {
+  console.error('❌ Nieobsłużony błąd (unhandledRejection):', error);
+});
+
+process.on('uncaughtException', error => {
+  console.error('❌ Nieobsłużony wyjątek (uncaughtException):', error);
+});
