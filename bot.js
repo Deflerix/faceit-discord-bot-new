@@ -1,23 +1,8 @@
 require('dotenv').config();
-const { ChannelType, Client, GatewayIntentBits, SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const axios = require('axios');
 const fs = require('fs');
 const express = require('express');
-const {
-  AudioPlayerStatus,
-  NoSubscriberBehavior,
-  StreamType,
-  VoiceConnectionStatus,
-  createAudioPlayer,
-  createAudioResource,
-  entersState,
-  generateDependencyReport,
-  joinVoiceChannel
-} = require('@discordjs/voice');
-const play = require('play-dl');
-const ytdl = require('@distube/ytdl-core');
-const ffmpegPath = require('ffmpeg-static');
-const { spawn } = require('child_process');
 
 // ================= KEEP ALIVE =================
 const app = express();
@@ -26,7 +11,7 @@ app.get('/', (req, res) => res.send('Bot is alive!'));
 app.listen(port, () => console.log(`Server running on port ${port}`));
 // =============================================
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates] });
+const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
 const {
   DISCORD_TOKEN,
@@ -34,15 +19,11 @@ const {
   CHANNEL_ID,
   CHECK_INTERVAL,
   FACEIT_NICKS,
-  GUILD_ID,
-  VOICE_CHANNEL_ID,
-  SONG_WIN_URL,
-  SONG_LOSE_URL
+  GUILD_ID
 } = process.env;
 const nicknames = (FACEIT_NICKS || '').split(',').map(n => n.trim()).filter(Boolean);
 const DEBUG = ['1', 'true', 'yes', 'on'].includes(String(process.env.DEBUG || '').toLowerCase());
-const DEFAULT_WIN_SOUND = 'https://samplelib.com/lib/preview/mp3/sample-3s.mp3';
-const DEFAULT_LOSE_SOUND = 'https://samplelib.com/lib/preview/mp3/sample-6s.mp3';
+console.log(`[BOOT] Node ${process.version} | DISCORD_TOKEN=${DISCORD_TOKEN ? 'set' : 'missing'}`);
 
 let checkedMatches = new Set();
 let playerCache = {}; // cache profilu FACEIT
@@ -52,59 +33,6 @@ let leaderboard = {};
 
 function debugLog(message) {
   if (DEBUG) console.log(`[DEBUG] ${message}`);
-}
-
-if (ffmpegPath && !process.env.FFMPEG_PATH) {
-  process.env.FFMPEG_PATH = ffmpegPath;
-  debugLog(`Ustawiono FFMPEG_PATH=${ffmpegPath}`);
-}
-
-function getSongUrl(isWin) {
-  const configured = isWin ? SONG_WIN_URL : SONG_LOSE_URL;
-  const fallback = isWin ? DEFAULT_WIN_SOUND : DEFAULT_LOSE_SOUND;
-  if (!configured) return fallback;
-  return configured;
-}
-
-function isDirectAudioUrl(url) {
-  return /\.(mp3|ogg|wav|m4a)(\?.*)?$/i.test(url || '');
-}
-
-function isYoutubeUrl(url) {
-  return /(?:youtube\.com|youtu\.be)/i.test(url || '');
-}
-
-async function playFallbackTone(connection) {
-  console.log('[AUDIO WARN] Uruchamiam awaryjny test tone (ffmpeg sine).');
-  const player = createAudioPlayer({
-    behaviors: {
-      noSubscriber: NoSubscriberBehavior.Play
-    }
-  });
-  const ffmpeg = spawn(process.env.FFMPEG_PATH || ffmpegPath, [
-    '-f', 'lavfi',
-    '-i', 'sine=frequency=880:duration=3',
-    '-f', 's16le',
-    '-ar', '48000',
-    '-ac', '2',
-    'pipe:1'
-  ], { stdio: ['ignore', 'pipe', 'pipe'] });
-
-  ffmpeg.stderr.on('data', () => {});
-  ffmpeg.on('error', err => console.error(`[AUDIO ERROR] ffmpeg fallback: ${err.message}`));
-
-  const resource = createAudioResource(ffmpeg.stdout, {
-    inputType: StreamType.Raw,
-    inlineVolume: true
-  });
-  if (resource.volume) resource.volume.setVolume(0.8);
-  connection.subscribe(player);
-  player.play(resource);
-  await entersState(player, AudioPlayerStatus.Playing, 10_000);
-  await new Promise(resolve => {
-    player.once(AudioPlayerStatus.Idle, resolve);
-    player.once('error', () => resolve());
-  });
 }
 
 // ================= AXIOS =================
@@ -202,159 +130,6 @@ function getRandomImage(isWin) {
   return selected;
 }
 
-async function playMatchSong(isWin, overrideUrl = null, overrideVoiceChannelId = null) {
-  const songUrl = overrideUrl || getSongUrl(isWin);
-  const targetVoiceChannelId = overrideVoiceChannelId || VOICE_CHANNEL_ID;
-  if (!targetVoiceChannelId || !songUrl) {
-    return { ok: false, reason: 'Brak VOICE_CHANNEL_ID lub URL utworu.' };
-  }
-  debugLog(`playMatchSong(isWin=${isWin}) url=${songUrl} voiceChannel=${targetVoiceChannelId}`);
-
-  let connection = null;
-  let lastError = null;
-  try {
-    const voiceChannel = await client.channels.fetch(targetVoiceChannelId);
-    if (!voiceChannel || !voiceChannel.isVoiceBased()) {
-      console.log(`[WARN] Kanał głosowy nieprawidłowy: ${targetVoiceChannelId}`);
-      return { ok: false, reason: `Kanał ${targetVoiceChannelId} nie jest kanałem głosowym.` };
-    }
-    const me = voiceChannel.guild.members.me;
-    const perms = voiceChannel.permissionsFor(me);
-    const canConnect = perms?.has('Connect');
-    const canSpeak = perms?.has('Speak');
-    debugLog(`voice perms connect=${canConnect} speak=${canSpeak}`);
-
-    if (!canConnect || !canSpeak) {
-      return {
-        ok: false,
-        reason: `Brak uprawnień na kanale (${targetVoiceChannelId}) -> Connect: ${Boolean(canConnect)}, Speak: ${Boolean(canSpeak)}`
-      };
-    }
-
-    connection = joinVoiceChannel({
-      channelId: voiceChannel.id,
-      guildId: voiceChannel.guild.id,
-      adapterCreator: voiceChannel.guild.voiceAdapterCreator,
-      selfDeaf: false,
-      selfMute: false
-    });
-
-    await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
-    if (voiceChannel.type === ChannelType.GuildStageVoice && me?.voice) {
-      // Stage channel: bot może być domyślnie "suppressed", więc nic nie słychać.
-      await me.voice.setRequestToSpeak(true).catch(() => {});
-      await me.voice.setSuppressed(false).catch(() => {});
-      debugLog('stage voice: requested to speak / unsuppressed');
-    }
-
-    let playedSuccessfully = false;
-
-    for (let attempt = 1; attempt <= 2; attempt += 1) {
-      debugLog(`audio attempt=${attempt}`);
-      let resource;
-
-      try {
-        if (isDirectAudioUrl(songUrl)) {
-          debugLog('audio source mode=direct-http');
-          const response = await axios.get(songUrl, {
-            responseType: 'stream',
-            timeout: 20_000,
-            maxRedirects: 5
-          });
-          resource = createAudioResource(response.data, { inlineVolume: true });
-        } else if (isYoutubeUrl(songUrl)) {
-          debugLog('audio source mode=ytdl-core');
-          const ytStream = ytdl(songUrl, {
-            filter: 'audioonly',
-            quality: 'highestaudio',
-            highWaterMark: 1 << 25
-          });
-          resource = createAudioResource(ytStream, { inlineVolume: true });
-        } else {
-          debugLog('audio source mode=play-dl');
-          const stream = await play.stream(songUrl);
-          resource = createAudioResource(stream.stream, {
-            inputType: stream.type,
-            inlineVolume: true
-          });
-        }
-      } catch (sourceErr) {
-        console.error(`[AUDIO ERROR] Nie udało się pobrać źródła audio: ${sourceErr.message}`);
-        lastError = sourceErr.message;
-        continue;
-      }
-
-      let playedMs = 0;
-      try {
-        if (resource.volume) resource.volume.setVolume(0.8);
-        const player = createAudioPlayer({
-          behaviors: {
-            noSubscriber: NoSubscriberBehavior.Play
-          }
-        });
-        const startedAt = Date.now();
-
-        connection.subscribe(player);
-        player.play(resource);
-        await entersState(player, AudioPlayerStatus.Playing, 20_000);
-
-        playedMs = await new Promise(resolve => {
-          const hardTimeout = setTimeout(() => resolve(Date.now() - startedAt), 180_000);
-
-          player.on(AudioPlayerStatus.Idle, () => {
-            clearTimeout(hardTimeout);
-            resolve(Date.now() - startedAt);
-          });
-
-          player.on('error', err => {
-            console.error(`[AUDIO ERROR] ${err.message}`);
-            clearTimeout(hardTimeout);
-            resolve(Date.now() - startedAt);
-          });
-        });
-      } catch (playbackErr) {
-        console.error(`[AUDIO ERROR] Problem podczas odtwarzania: ${playbackErr.message}`);
-        lastError = playbackErr.message;
-        continue;
-      }
-
-      // Jeśli utwór zakończył się podejrzanie szybko (np. 3-5s), spróbuj raz jeszcze.
-      if (playedMs >= 8_000 || attempt === 2) {
-        playedSuccessfully = playedMs > 0;
-        break;
-      }
-      console.log('[AUDIO WARN] Odtwarzanie zakończyło się za szybko, ponawiam próbę...');
-    }
-
-    if (!playedSuccessfully) {
-      try {
-        await playFallbackTone(connection);
-      } catch (fallbackErr) {
-        lastError = fallbackErr.message;
-        return { ok: false, reason: `Fallback tone nie zagrał: ${fallbackErr.message}` };
-      }
-    }
-    return { ok: true, reason: '' };
-  } catch (err) {
-    console.error(`[AUDIO ERROR] playMatchSong failed: ${err.message}`);
-    return { ok: false, reason: err.message || lastError || 'Nieznany błąd audio.' };
-  } finally {
-    debugLog('audio disconnect');
-    if (connection) connection.destroy();
-  }
-}
-
-function warnAudioConfig() {
-  if (!VOICE_CHANNEL_ID) console.log('[INFO] Brak VOICE_CHANNEL_ID - audio po meczu wyłączone.');
-  if (!SONG_WIN_URL || !SONG_LOSE_URL) {
-    console.log('[INFO] Brak SONG_WIN_URL lub SONG_LOSE_URL - użyte będą domyślne krótkie MP3.');
-  }
-  if (DEBUG) {
-    console.log('[DEBUG] @discordjs/voice dependency report:');
-    console.log(generateDependencyReport());
-  }
-}
-
 // ================= MATCH =================
 async function processMatch(forceSend = false) {
   try {
@@ -392,8 +167,7 @@ async function processMatch(forceSend = false) {
 
       const enemyTeam = (round.teams || []).find(t => t !== ourTeam) || { players: [] };
       const { our, enemy } = getTeamScore(round, ourTeam);
-      const isWin = our > enemy;
-      const resultText = `${isWin ? '🟢 WIN' : '🔴 LOSE'} | ${our}:${enemy}`;
+      const resultText = `${our > enemy ? '🟢 WIN' : '🔴 LOSE'} | ${our}:${enemy}`;
 
       const top = getTopFragger(ourTeam.players || []);
       const profesore = getElProfesore(ourTeam.players || []);
@@ -412,7 +186,7 @@ async function processMatch(forceSend = false) {
       }
 
       const mentions = nicknames.map(getMention).join(' ');
-      const image = getRandomImage(isWin);
+      const image = getRandomImage(our > enemy);
       const rawTs = lastMatches.find(m => m?.match_id === matchId)?.finished_at
         || lastMatches.find(m => m?.match_id === matchId)?.started_at
         || Math.floor(Date.now() / 1000);
@@ -447,17 +221,9 @@ async function processMatch(forceSend = false) {
         debugLog(`image sent for ${matchId}`);
       }
 
-      // Oznacz mecz jako wysłany ZANIM odpalimy audio, żeby błąd muzyki nie powodował
-      // ponownego wysyłania tego samego raportu w kolejnych tickach.
       checkedMatches.add(matchId);
       saveMatches();
       debugLog(`match persisted ${matchId}`);
-
-      try {
-        await playMatchSong(isWin);
-      } catch (audioErr) {
-        console.error(`[AUDIO WARN] Nie udało się odtworzyć muzyki: ${audioErr.message}`);
-      }
     }
   } catch (err) {
     console.error(err.message);
@@ -467,32 +233,12 @@ async function processMatch(forceSend = false) {
 // ================= READY =================
 client.once('clientReady', async () => {
   console.log(`Zalogowano jako ${client.user.tag}`);
-  warnAudioConfig();
   loadMatches();
   loadLeaderboard();
 
   const commands = [
     new SlashCommandBuilder().setName('zmecz_zweiha').setDescription('Zlicza zmeczenie Zweiha'),
-    new SlashCommandBuilder().setName('leaderboard').setDescription('Pokazuje ranking zmeczeń'),
-    new SlashCommandBuilder()
-      .setName('testaudio')
-      .setDescription('Testuje audio na kanale VOICE_CHANNEL_ID')
-      .addStringOption(option =>
-        option
-          .setName('typ')
-          .setDescription('Jaki dźwięk puścić')
-          .setRequired(true)
-          .addChoices(
-            { name: 'win', value: 'win' },
-            { name: 'lose', value: 'lose' }
-          )
-      )
-      .addStringOption(option =>
-        option
-          .setName('url')
-          .setDescription('Opcjonalny bezpośredni URL audio (mp3/ogg)')
-          .setRequired(false)
-      )
+    new SlashCommandBuilder().setName('leaderboard').setDescription('Pokazuje ranking zmeczeń')
   ];
 
   try {
@@ -539,32 +285,6 @@ client.on('interactionCreate', async interaction => {
     });
 
     await interaction.reply({ content: message });
-  }
-
-  if (interaction.commandName === 'testaudio') {
-    const typ = interaction.options.getString('typ', true);
-    const customUrl = interaction.options.getString('url');
-    const memberVoiceChannelId = interaction.member?.voice?.channelId || null;
-    const resolvedChannelId = memberVoiceChannelId || VOICE_CHANNEL_ID || null;
-
-    await interaction.reply({
-      content: `🔊 Test audio: ${typ}${customUrl ? ' (custom URL)' : ''}\n🎤 Kanał: ${resolvedChannelId || 'brak'}`,
-      ephemeral: true
-    });
-
-    try {
-      const audioResult = await playMatchSong(typ === 'win', customUrl || null, resolvedChannelId);
-      if (audioResult.ok) {
-        await interaction.followUp({ content: '✅ Test audio zakończony (sprawdź kanał głosowy).', ephemeral: true });
-      } else {
-        await interaction.followUp({
-          content: `⚠️ Audio nie wystartowało.\nPowód: ${audioResult.reason}`,
-          ephemeral: true
-        });
-      }
-    } catch (err) {
-      await interaction.followUp({ content: `❌ Błąd audio (unexpected): ${err.message}`, ephemeral: true });
-    }
   }
 
 });
