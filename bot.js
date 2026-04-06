@@ -13,27 +13,14 @@ app.listen(port, () => console.log(`Server running on port ${port}`));
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
-const {
-  DISCORD_TOKEN,
-  FACEIT_API_KEY,
-  CHANNEL_ID,
-  CHECK_INTERVAL,
-  FACEIT_NICKS,
-  GUILD_ID
-} = process.env;
+const { DISCORD_TOKEN, FACEIT_API_KEY, CHANNEL_ID, CHECK_INTERVAL, FACEIT_NICKS, GUILD_ID } = process.env;
 const nicknames = (FACEIT_NICKS || '').split(',').map(n => n.trim()).filter(Boolean);
-const DEBUG = ['1', 'true', 'yes', 'on'].includes(String(process.env.DEBUG || '').toLowerCase());
-console.log(`[BOOT] Node ${process.version} | DISCORD_TOKEN=${DISCORD_TOKEN ? 'set' : 'missing'}`);
 
 let checkedMatches = new Set();
 let playerCache = {}; // cache profilu FACEIT
 let eloCache = {}; // cache ELO do porównań tick->tick
 let lastImage = null;
 let leaderboard = {};
-
-function debugLog(message) {
-  if (DEBUG) console.log(`[DEBUG] ${message}`);
-}
 
 // ================= AXIOS =================
 const api = axios.create({
@@ -53,7 +40,6 @@ const loadLeaderboard = () => {
 
 // ================= FACEIT =================
 async function getPlayer(nick, forceRefresh = false) {
-  debugLog(`getPlayer(${nick}) forceRefresh=${forceRefresh}`);
   if (!forceRefresh && playerCache[nick]) return playerCache[nick];
   const res = await api.get(`https://open.faceit.com/data/v4/players?nickname=${encodeURIComponent(nick)}`);
   playerCache[nick] = res.data;
@@ -61,13 +47,11 @@ async function getPlayer(nick, forceRefresh = false) {
 }
 
 async function getLastMatch(playerId) {
-  debugLog(`getLastMatch(${playerId})`);
   const res = await api.get(`https://open.faceit.com/data/v4/players/${playerId}/history?game=cs2&limit=1`);
   return res.data.items?.[0];
 }
 
 async function getMatchStats(matchId) {
-  debugLog(`getMatchStats(${matchId})`);
   const res = await api.get(`https://open.faceit.com/data/v4/matches/${matchId}/stats`);
   return res.data;
 }
@@ -133,7 +117,6 @@ function getRandomImage(isWin) {
 // ================= MATCH =================
 async function processMatch(forceSend = false) {
   try {
-    debugLog(`processMatch(forceSend=${forceSend})`);
     if (!nicknames.length) return;
 
     // Pobranie ostatnich meczów wszystkich nicków.
@@ -145,14 +128,12 @@ async function processMatch(forceSend = false) {
     );
 
     const uniqueMatchIds = [...new Set(lastMatches.map(m => m?.match_id).filter(Boolean))];
-    debugLog(`uniqueMatchIds=${JSON.stringify(uniqueMatchIds)}`);
     if (!uniqueMatchIds.length) return;
 
     const channel = await client.channels.fetch(CHANNEL_ID);
     if (!channel || !channel.isTextBased()) return;
 
     for (const matchId of uniqueMatchIds) {
-      debugLog(`processing matchId=${matchId}`);
       if (checkedMatches.has(matchId) && !forceSend) continue;
 
       const stats = await getMatchStats(matchId);
@@ -167,7 +148,8 @@ async function processMatch(forceSend = false) {
 
       const enemyTeam = (round.teams || []).find(t => t !== ourTeam) || { players: [] };
       const { our, enemy } = getTeamScore(round, ourTeam);
-      const resultText = `${our > enemy ? '🟢 WIN' : '🔴 LOSE'} | ${our}:${enemy}`;
+      const isWin = our > enemy;
+      const resultText = `${isWin ? '🟢 WIN' : '🔴 LOSE'} | ${our}:${enemy}`;
 
       const top = getTopFragger(ourTeam.players || []);
       const profesore = getElProfesore(ourTeam.players || []);
@@ -186,7 +168,7 @@ async function processMatch(forceSend = false) {
       }
 
       const mentions = nicknames.map(getMention).join(' ');
-      const image = getRandomImage(our > enemy);
+      const image = getRandomImage(isWin);
       const rawTs = lastMatches.find(m => m?.match_id === matchId)?.finished_at
         || lastMatches.find(m => m?.match_id === matchId)?.started_at
         || Math.floor(Date.now() / 1000);
@@ -214,16 +196,12 @@ async function processMatch(forceSend = false) {
         content: message,
         embeds: [statsEmbed]
       });
-      debugLog(`match report sent for ${matchId}`);
 
       if (image) {
         await channel.send({ files: [image] });
-        debugLog(`image sent for ${matchId}`);
       }
-
       checkedMatches.add(matchId);
       saveMatches();
-      debugLog(`match persisted ${matchId}`);
     }
   } catch (err) {
     console.error(err.message);
@@ -231,7 +209,7 @@ async function processMatch(forceSend = false) {
 }
 
 // ================= READY =================
-client.once('clientReady', async () => {
+client.once('ready', async () => {
   console.log(`Zalogowano jako ${client.user.tag}`);
   loadMatches();
   loadLeaderboard();
@@ -241,18 +219,7 @@ client.once('clientReady', async () => {
     new SlashCommandBuilder().setName('leaderboard').setDescription('Pokazuje ranking zmeczeń')
   ];
 
-  try {
-    const commandPayload = commands.map(c => c.toJSON());
-    if (GUILD_ID) {
-      await client.application.commands.set(commandPayload, GUILD_ID);
-      console.log(`[INFO] Slash commands zarejestrowane dla guild ${GUILD_ID}`);
-    } else {
-      await client.application.commands.set(commandPayload);
-      console.log('[INFO] Slash commands zarejestrowane globalnie (propagacja może potrwać).');
-    }
-  } catch (commandErr) {
-    console.error(`[ERROR] Rejestracja slash commands nie powiodła się: ${commandErr.message}`);
-  }
+  for (const c of commands) await client.application.commands.create(c, GUILD_ID);
 
   setInterval(() => processMatch(), Number(CHECK_INTERVAL) || 180000);
 });
@@ -286,15 +253,6 @@ client.on('interactionCreate', async interaction => {
 
     await interaction.reply({ content: message });
   }
-
 });
 
-if (!DISCORD_TOKEN) {
-  console.error('[ERROR] Brak DISCORD_TOKEN w zmiennych środowiskowych.');
-  process.exit(1);
-}
-
-client.login(DISCORD_TOKEN).catch(err => {
-  console.error(`[ERROR] Nie udało się zalogować bota do Discorda: ${err.message}`);
-  process.exit(1);
-});
+client.login(DISCORD_TOKEN);
