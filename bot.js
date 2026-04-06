@@ -569,4 +569,12 @@ client.on('interactionCreate', async interaction => {
 
 });
 
-client.login(DISCORD_TOKEN);
+if (!DISCORD_TOKEN) {
+  console.error('[ERROR] Brak DISCORD_TOKEN w zmiennych środowiskowych.');
+  process.exit(1);
+}
+
+client.login(DISCORD_TOKEN).catch(err => {
+  console.error(`[ERROR] Nie udało się zalogować bota do Discorda: ${err.message}`);
+  process.exit(1);
+});
