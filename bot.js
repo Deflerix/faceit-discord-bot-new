@@ -15,6 +15,7 @@ const {
   joinVoiceChannel
 } = require('@discordjs/voice');
 const play = require('play-dl');
+const ytdl = require('@distube/ytdl-core');
 const ffmpegPath = require('ffmpeg-static');
 const { spawn } = require('child_process');
 
@@ -67,6 +68,10 @@ function getSongUrl(isWin) {
 
 function isDirectAudioUrl(url) {
   return /\.(mp3|ogg|wav|m4a)(\?.*)?$/i.test(url || '');
+}
+
+function isYoutubeUrl(url) {
+  return /(?:youtube\.com|youtu\.be)/i.test(url || '');
 }
 
 async function playFallbackTone(connection) {
@@ -200,19 +205,31 @@ function getRandomImage(isWin) {
 async function playMatchSong(isWin, overrideUrl = null, overrideVoiceChannelId = null) {
   const songUrl = overrideUrl || getSongUrl(isWin);
   const targetVoiceChannelId = overrideVoiceChannelId || VOICE_CHANNEL_ID;
-  if (!targetVoiceChannelId || !songUrl) return false;
+  if (!targetVoiceChannelId || !songUrl) {
+    return { ok: false, reason: 'Brak VOICE_CHANNEL_ID lub URL utworu.' };
+  }
   debugLog(`playMatchSong(isWin=${isWin}) url=${songUrl} voiceChannel=${targetVoiceChannelId}`);
 
   let connection = null;
+  let lastError = null;
   try {
     const voiceChannel = await client.channels.fetch(targetVoiceChannelId);
     if (!voiceChannel || !voiceChannel.isVoiceBased()) {
       console.log(`[WARN] Kanał głosowy nieprawidłowy: ${targetVoiceChannelId}`);
-      return false;
+      return { ok: false, reason: `Kanał ${targetVoiceChannelId} nie jest kanałem głosowym.` };
     }
     const me = voiceChannel.guild.members.me;
     const perms = voiceChannel.permissionsFor(me);
-    debugLog(`voice perms connect=${perms?.has('Connect')} speak=${perms?.has('Speak')}`);
+    const canConnect = perms?.has('Connect');
+    const canSpeak = perms?.has('Speak');
+    debugLog(`voice perms connect=${canConnect} speak=${canSpeak}`);
+
+    if (!canConnect || !canSpeak) {
+      return {
+        ok: false,
+        reason: `Brak uprawnień na kanale (${targetVoiceChannelId}) -> Connect: ${Boolean(canConnect)}, Speak: ${Boolean(canSpeak)}`
+      };
+    }
 
     connection = joinVoiceChannel({
       channelId: voiceChannel.id,
@@ -245,6 +262,14 @@ async function playMatchSong(isWin, overrideUrl = null, overrideVoiceChannelId =
             maxRedirects: 5
           });
           resource = createAudioResource(response.data, { inlineVolume: true });
+        } else if (isYoutubeUrl(songUrl)) {
+          debugLog('audio source mode=ytdl-core');
+          const ytStream = ytdl(songUrl, {
+            filter: 'audioonly',
+            quality: 'highestaudio',
+            highWaterMark: 1 << 25
+          });
+          resource = createAudioResource(ytStream, { inlineVolume: true });
         } else {
           debugLog('audio source mode=play-dl');
           const stream = await play.stream(songUrl);
@@ -255,6 +280,7 @@ async function playMatchSong(isWin, overrideUrl = null, overrideVoiceChannelId =
         }
       } catch (sourceErr) {
         console.error(`[AUDIO ERROR] Nie udało się pobrać źródła audio: ${sourceErr.message}`);
+        lastError = sourceErr.message;
         continue;
       }
 
@@ -288,6 +314,7 @@ async function playMatchSong(isWin, overrideUrl = null, overrideVoiceChannelId =
         });
       } catch (playbackErr) {
         console.error(`[AUDIO ERROR] Problem podczas odtwarzania: ${playbackErr.message}`);
+        lastError = playbackErr.message;
         continue;
       }
 
@@ -300,12 +327,17 @@ async function playMatchSong(isWin, overrideUrl = null, overrideVoiceChannelId =
     }
 
     if (!playedSuccessfully) {
-      await playFallbackTone(connection);
+      try {
+        await playFallbackTone(connection);
+      } catch (fallbackErr) {
+        lastError = fallbackErr.message;
+        return { ok: false, reason: `Fallback tone nie zagrał: ${fallbackErr.message}` };
+      }
     }
-    return true;
+    return { ok: true, reason: '' };
   } catch (err) {
     console.error(`[AUDIO ERROR] playMatchSong failed: ${err.message}`);
-    return false;
+    return { ok: false, reason: err.message || lastError || 'Nieznany błąd audio.' };
   } finally {
     debugLog('audio disconnect');
     if (connection) connection.destroy();
@@ -510,11 +542,14 @@ client.on('interactionCreate', async interaction => {
     });
 
     try {
-      const ok = await playMatchSong(typ === 'win', customUrl || null, resolvedChannelId);
-      if (ok) {
+      const audioResult = await playMatchSong(typ === 'win', customUrl || null, resolvedChannelId);
+      if (audioResult.ok) {
         await interaction.followUp({ content: '✅ Test audio zakończony (sprawdź kanał głosowy).', ephemeral: true });
       } else {
-        await interaction.followUp({ content: '⚠️ Audio nie wystartowało. Wejdź na kanał voice i odpal /testaudio ponownie albo popraw VOICE_CHANNEL_ID.', ephemeral: true });
+        await interaction.followUp({
+          content: `⚠️ Audio nie wystartowało.\nPowód: ${audioResult.reason}`,
+          ephemeral: true
+        });
       }
     } catch (err) {
       await interaction.followUp({ content: `❌ Błąd audio (unexpected): ${err.message}`, ephemeral: true });
