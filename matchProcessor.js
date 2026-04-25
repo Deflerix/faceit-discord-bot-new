@@ -198,15 +198,14 @@ async function processMatches({ client, storage, faceit, defaultChannelId, eloCa
       resultText,
       streakText,
       `🌍 Mapa: ${mapName}`,
-
       '',
       goat ? `🐐 GOAT: ${goat.nick} (${goat.kills})` : '',
       profesore ? `🚑 PROFESORE: ${profesore.nick} (${profesore.kills})` : '',
-
       '',
       '📈 ELO:',
       eloLines.trimEnd()
-    ].filter(Boolean).join('\n');
+    ]
+    .join('\n');
 
     const statsEmbed = new EmbedBuilder()
       .setColor(isWin ? 0x2ecc71 : 0xe74c3c)
