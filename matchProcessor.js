@@ -37,7 +37,7 @@ function getCorePlayers(players = []) {
   );
 }
 
-// MVP Z CAŁEGO MECZU
+// MVP z całego meczu
 function getMVPFromMatch(round) {
   const allPlayers = (round.teams || []).flatMap(t => t.players || []);
 
@@ -47,26 +47,29 @@ function getMVPFromMatch(round) {
   }, { nick: null, kills: -1 });
 }
 
+// GOAT (tylko core jeśli są)
 function getGoat(players = []) {
   const core = getCorePlayers(players);
-  if (!core.length) return null;
+  const pool = core.length ? core : players;
 
-  return core.reduce((best, p) => {
+  return pool.reduce((best, p) => {
     const kills = Number(p.player_stats?.Kills ?? 0);
     return kills > best.kills ? { nick: p.nickname, kills } : best;
   }, { nick: null, kills: -1 });
 }
 
+// PROFESORE (najmniej killów)
 function getProfesore(players = []) {
   const core = getCorePlayers(players);
-  if (!core.length) return null;
+  const pool = core.length ? core : players;
 
-  return core.reduce((worst, p) => {
+  return pool.reduce((worst, p) => {
     const kills = Number(p.player_stats?.Kills ?? 0);
     return kills < worst.kills ? { nick: p.nickname, kills } : worst;
   }, { nick: null, kills: Infinity });
 }
 
+// czy gra cała trójka
 function isFullTeamPlaying(players = []) {
   const lower = players.map(p => (p.nickname || '').toLowerCase());
   return CORE_PLAYERS.every(nick => lower.includes(nick));
@@ -89,7 +92,11 @@ function getRandomImage(isWin, lastImageRef) {
 
 function toDateText(unixTs) {
   return new Date(unixTs * 1000).toLocaleString('pl-PL', {
-    day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit'
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
   });
 }
 
@@ -124,15 +131,20 @@ async function processMatches({ client, storage, faceit, defaultChannelId, eloCa
     if (!round) continue;
 
     const allRoundPlayers = (round.teams || []).flatMap(t => t.players || []);
-    const activeTracked = allRoundPlayers.filter(p => trackedMap.has((p.nickname || '').toLowerCase()));
+    const activeTracked = allRoundPlayers.filter(p =>
+      trackedMap.has((p.nickname || '').toLowerCase())
+    );
     if (!activeTracked.length) continue;
 
     const ourTeam = (round.teams || []).find(t =>
-      (t.players || []).some(p => trackedMap.has((p.nickname || '').toLowerCase()))
+      (t.players || []).some(p =>
+        trackedMap.has((p.nickname || '').toLowerCase())
+      )
     );
     if (!ourTeam) continue;
 
     const enemyTeam = (round.teams || []).find(t => t !== ourTeam) || { players: [] };
+
     const { our, enemy } = getTeamScore(round, ourTeam);
     const isWin = our > enemy;
     const resultType = isWin ? 'win' : 'lose';
@@ -172,9 +184,10 @@ async function processMatches({ client, storage, faceit, defaultChannelId, eloCa
         .join(' ');
     }
 
-    const rawTs = lastMatches.find(m => m?.match_id === matchId)?.finished_at
-      || lastMatches.find(m => m?.match_id === matchId)?.started_at
-      || Math.floor(Date.now() / 1000);
+    const rawTs =
+      lastMatches.find(m => m?.match_id === matchId)?.finished_at ||
+      lastMatches.find(m => m?.match_id === matchId)?.started_at ||
+      Math.floor(Date.now() / 1000);
 
     const dateText = toDateText(rawTs);
     const mapName = round.round_stats?.Map || '-';
@@ -185,21 +198,29 @@ async function processMatches({ client, storage, faceit, defaultChannelId, eloCa
       resultText,
       streakText,
       `🌍 Mapa: ${mapName}`,
+
       '',
       goat ? `🐐 GOAT: ${goat.nick} (${goat.kills})` : '',
       profesore ? `🚑 PROFESORE: ${profesore.nick} (${profesore.kills})` : '',
+
       '',
       '📈 ELO:',
       eloLines.trimEnd()
     ].filter(Boolean).join('\n');
-    
+
     const statsEmbed = new EmbedBuilder()
       .setColor(isWin ? 0x2ecc71 : 0xe74c3c)
       .setTitle('📋 Statystyki meczu')
       .addFields(
-        { name: 'OUR', value: `\`\`\`\n${formatPlayerStats(ourTeam.players, mvp?.nick)}\n\`\`\`` },
-        { name: 'ENEMY', value: `\`\`\`\n${formatPlayerStats(enemyTeam.players, mvp?.nick)}\n\`\`\`` },
-        ...(mvp ? [{ name: 'MVP', value: mvp.nick, inline: true }] : [])
+        {
+          name: 'OUR',
+          value: `\`\`\`\n${formatPlayerStats(ourTeam.players, mvp?.nick)}\n\`\`\``
+        },
+        {
+          name: 'ENEMY',
+          value: `\`\`\`\n${formatPlayerStats(enemyTeam.players, mvp?.nick)}\n\`\`\``
+        },
+        ...(mvp ? [{ name: 'MVP', value: `👑 ${mvp.nick}`, inline: true }] : [])
       );
 
     await channel.send({ content: message, embeds: [statsEmbed] });
