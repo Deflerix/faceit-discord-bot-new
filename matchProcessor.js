@@ -25,14 +25,50 @@ function getTeamScore(round, ourTeam) {
   return ourTeam === team1 ? { our: s1, enemy: s2 } : { our: s2, enemy: s1 };
 }
 
-function getTopFragger(players = []) {
-  const coreOnly = players.filter(p => CORE_PLAYERS.includes((p.nickname || '').toLowerCase()));
-  const pool = coreOnly.length ? coreOnly : players;
-  return pool.reduce((best, p) => {
-    const kills = Number(p.player_stats?.Kills ?? 0);
-    return kills > best.kills ? { nick: p.nickname || '?', kills } : best;
-  }, { nick: '?', kills: -1 });
+// ================= NOWE FUNKCJE =================
+
+function getCorePlayers(players = []) {
+  return players.filter(p =>
+    CORE_PLAYERS.includes((p.nickname || '').toLowerCase())
+  );
 }
+
+function getMVP(players = []) {
+  const core = getCorePlayers(players);
+  if (!core.length) return null;
+
+  return core.reduce((best, p) => {
+    const kills = Number(p.player_stats?.Kills ?? 0);
+    return kills > best.kills ? { nick: p.nickname, kills } : best;
+  }, { nick: null, kills: -1 });
+}
+
+function getGoat(players = []) {
+  const core = getCorePlayers(players);
+  if (!core.length) return null;
+
+  return core.reduce((best, p) => {
+    const kills = Number(p.player_stats?.Kills ?? 0);
+    return kills > best.kills ? { nick: p.nickname, kills } : best;
+  }, { nick: null, kills: -1 });
+}
+
+function getProfesore(players = []) {
+  const core = getCorePlayers(players);
+  if (!core.length) return null;
+
+  return core.reduce((worst, p) => {
+    const kills = Number(p.player_stats?.Kills ?? 0);
+    return kills < worst.kills ? { nick: p.nickname, kills } : worst;
+  }, { nick: null, kills: Infinity });
+}
+
+function isFullTeamPlaying(players = []) {
+  const lower = players.map(p => (p.nickname || '').toLowerCase());
+  return CORE_PLAYERS.every(nick => lower.includes(nick));
+}
+
+// =================================================
 
 function getRandomImage(isWin, lastImageRef) {
   const images = isWin
@@ -100,7 +136,16 @@ async function processMatches({ client, storage, faceit, defaultChannelId, eloCa
     const resultType = isWin ? 'win' : 'lose';
     const resultText = `${isWin ? '🟢 WIN' : '🔴 LOSE'} | ${our}:${enemy}`;
 
-    const mvp = getTopFragger(ourTeam.players || []);
+    const mvp = getMVP(ourTeam.players);
+    const goat = getGoat(ourTeam.players);
+    const profesore = getProfesore(ourTeam.players);
+
+    // ===== STREAK (TYLKO CAŁA TRÓJKA) =====
+    let streakText = '';
+    if (isFullTeamPlaying(ourTeam.players)) {
+      const streak = storage.updateStreak('team', resultType);
+      streakText = `🔥 STREAK ${streak.type.toUpperCase()} ${streak.count}`;
+    }
 
     let eloLines = '';
     for (const nick of trackedPlayers) {
@@ -114,12 +159,6 @@ async function processMatches({ client, storage, faceit, defaultChannelId, eloCa
         eloLines += `- ${nick} brak danych\n`;
       }
     }
-
-    const streakLines = activeTracked.map(p => {
-      const displayNick = trackedMap.get((p.nickname || '').toLowerCase()) || p.nickname;
-      const streak = storage.updateStreak(displayNick, resultType);
-      return `🔥 STREAK ${streak.type.toUpperCase()} ${streak.count} (${displayNick})`;
-    });
 
     const mentions = activeTracked
       .map(p => trackedMap.get((p.nickname || '').toLowerCase()) || p.nickname)
@@ -137,12 +176,14 @@ async function processMatches({ client, storage, faceit, defaultChannelId, eloCa
       `📊 Raport ${mentions}`,
       `📅 Data: ${dateText}`,
       resultText,
-      ...streakLines,
+      streakText,
       `🌍 Mapa: ${mapName}`,
+      goat ? `🐐 GOAT: ${goat.nick} (${goat.kills})` : '',
+      profesore ? `🚑 PROFESORE: ${profesore.nick} (${profesore.kills})` : '',
       '',
       '📈 ELO:',
       eloLines.trimEnd()
-    ].join('\n');
+    ].filter(Boolean).join('\n');
 
     const statsEmbed = new EmbedBuilder()
       .setColor(isWin ? 0x2ecc71 : 0xe74c3c)
@@ -150,7 +191,7 @@ async function processMatches({ client, storage, faceit, defaultChannelId, eloCa
       .addFields(
         { name: 'OUR', value: `\`\`\`\n${formatPlayerStats(ourTeam.players)}\n\`\`\`` },
         { name: 'ENEMY', value: `\`\`\`\n${formatPlayerStats(enemyTeam.players)}\n\`\`\`` },
-        { name: 'MVP', value: mvp.nick || '?', inline: true }
+        ...(mvp ? [{ name: 'MVP', value: mvp.nick, inline: true }] : [])
       );
 
     await channel.send({ content: message, embeds: [statsEmbed] });
