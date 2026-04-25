@@ -7,15 +7,21 @@ function getMention(nick) {
   return id ? `<@${id}>` : nick;
 }
 
-function formatPlayerStats(players = []) {
+function formatPlayerStats(players = [], mvpNick = null) {
   return players.map(p => {
     const s = p.player_stats || {};
     const kd = Number(s['K/D Ratio'] ?? 0);
     const kills = s.Kills ?? '-';
     const deaths = s.Deaths ?? '-';
     const hs = s['Headshots %'] ?? '-';
-    const nick = (p.nickname || '?').slice(0, 12);
-    return `${nick.padEnd(12)} | ${kills}/${deaths} | KD:${kd.toFixed(2)} | HS:${hs}`;
+
+    let nick = (p.nickname || '?').slice(0, 12);
+
+    if (mvpNick && p.nickname === mvpNick) {
+      nick = `👑 ${nick}`;
+    }
+
+    return `${nick.padEnd(14)} | ${kills}/${deaths} | KD:${kd.toFixed(2)} | HS:${hs}`;
   }).join('\n');
 }
 
@@ -25,19 +31,17 @@ function getTeamScore(round, ourTeam) {
   return ourTeam === team1 ? { our: s1, enemy: s2 } : { our: s2, enemy: s1 };
 }
 
-// ================= NOWE FUNKCJE =================
-
 function getCorePlayers(players = []) {
   return players.filter(p =>
     CORE_PLAYERS.includes((p.nickname || '').toLowerCase())
   );
 }
 
-function getMVP(players = []) {
-  const core = getCorePlayers(players);
-  if (!core.length) return null;
+// MVP Z CAŁEGO MECZU
+function getMVPFromMatch(round) {
+  const allPlayers = (round.teams || []).flatMap(t => t.players || []);
 
-  return core.reduce((best, p) => {
+  return allPlayers.reduce((best, p) => {
     const kills = Number(p.player_stats?.Kills ?? 0);
     return kills > best.kills ? { nick: p.nickname, kills } : best;
   }, { nick: null, kills: -1 });
@@ -67,8 +71,6 @@ function isFullTeamPlaying(players = []) {
   const lower = players.map(p => (p.nickname || '').toLowerCase());
   return CORE_PLAYERS.every(nick => lower.includes(nick));
 }
-
-// =================================================
 
 function getRandomImage(isWin, lastImageRef) {
   const images = isWin
@@ -136,11 +138,10 @@ async function processMatches({ client, storage, faceit, defaultChannelId, eloCa
     const resultType = isWin ? 'win' : 'lose';
     const resultText = `${isWin ? '🟢 WIN' : '🔴 LOSE'} | ${our}:${enemy}`;
 
-    const mvp = getMVP(ourTeam.players);
+    const mvp = getMVPFromMatch(round);
     const goat = getGoat(ourTeam.players);
     const profesore = getProfesore(ourTeam.players);
 
-    // ===== STREAK (TYLKO CAŁA TRÓJKA) =====
     let streakText = '';
     if (isFullTeamPlaying(ourTeam.players)) {
       const streak = storage.updateStreak('team', resultType);
@@ -160,10 +161,16 @@ async function processMatches({ client, storage, faceit, defaultChannelId, eloCa
       }
     }
 
-    const mentions = activeTracked
-      .map(p => trackedMap.get((p.nickname || '').toLowerCase()) || p.nickname)
-      .map(getMention)
-      .join(' ');
+    let mentions = '';
+    if (isFullTeamPlaying(ourTeam.players)) {
+      const roleId = process.env.CORE_ROLE_ID;
+      mentions = roleId ? `<@&${roleId}>` : 'CORE';
+    } else {
+      mentions = activeTracked
+        .map(p => trackedMap.get((p.nickname || '').toLowerCase()) || p.nickname)
+        .map(getMention)
+        .join(' ');
+    }
 
     const rawTs = lastMatches.find(m => m?.match_id === matchId)?.finished_at
       || lastMatches.find(m => m?.match_id === matchId)?.started_at
@@ -189,8 +196,8 @@ async function processMatches({ client, storage, faceit, defaultChannelId, eloCa
       .setColor(isWin ? 0x2ecc71 : 0xe74c3c)
       .setTitle('📋 Statystyki meczu')
       .addFields(
-        { name: 'OUR', value: `\`\`\`\n${formatPlayerStats(ourTeam.players)}\n\`\`\`` },
-        { name: 'ENEMY', value: `\`\`\`\n${formatPlayerStats(enemyTeam.players)}\n\`\`\`` },
+        { name: 'OUR', value: `\`\`\`\n${formatPlayerStats(ourTeam.players, mvp?.nick)}\n\`\`\`` },
+        { name: 'ENEMY', value: `\`\`\`\n${formatPlayerStats(enemyTeam.players, mvp?.nick)}\n\`\`\`` },
         ...(mvp ? [{ name: 'MVP', value: mvp.nick, inline: true }] : [])
       );
 
