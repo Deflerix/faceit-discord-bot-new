@@ -31,7 +31,7 @@ function isAdmin(interaction) {
   return interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild);
 }
 
-async function handleCommand(interaction, storage) {
+async function handleCommand(interaction, storage, { faceit, matchLogger } = {}) {
   const { commandName } = interaction;
 
   if (commandName === 'zmecz_zweiha') {
@@ -65,6 +65,18 @@ async function handleCommand(interaction, storage) {
   if (commandName === 'add_player') {
     const nick = interaction.options.getString('nick', true);
     const result = storage.addPlayer(nick);
+    if (result.ok && faceit && matchLogger) {
+      try {
+        const player = await faceit.getPlayer(result.nick, { forceRefresh: true });
+        matchLogger.upsertPlayer({
+          player_id: player.player_id,
+          nickname: player.nickname || result.nick,
+          active: true
+        });
+      } catch (err) {
+        console.error(`[COMMAND] SQLite player upsert failed for ${result.nick}: ${err.message}`);
+      }
+    }
     await interaction.reply({ content: result.ok ? `✅ Dodano gracza: ${result.nick}` : `⚠️ ${result.reason}`, ephemeral: true });
     return;
   }
