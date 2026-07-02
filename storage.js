@@ -11,7 +11,7 @@ function readJson(filePath, fallback) {
 }
 
 class Storage {
-  constructor({ playersFromEnv = [] } = {}) {
+  constructor({ playersFromEnv = [], matchLogger = null } = {}) {
     this.paths = {
       matches: 'matches.json',
       leaderboard: 'leaderboard.json',
@@ -25,6 +25,7 @@ class Storage {
     this.streaks = readJson(this.paths.streaks, {});
     this.players = readJson(this.paths.players, playersFromEnv);
     this.config = readJson(this.paths.config, {});
+    this.matchLogger = matchLogger;
 
     if (!Array.isArray(this.players)) this.players = [];
     this.players = [...new Set(this.players.map(v => String(v).trim()).filter(Boolean))];
@@ -59,12 +60,32 @@ class Storage {
     return { ok: true, nick: normalized };
   }
 
+  syncPlayer(player) {
+    if (!this.matchLogger) return;
+    try {
+      this.matchLogger.upsertPlayer({
+        player_id: player.player_id,
+        nickname: player.nickname,
+        active: true
+      });
+    } catch (err) {
+      console.error(`[STORAGE] sqlite player sync failed: ${err.message}`);
+    }
+  }
+
   removePlayer(nick) {
     const normalized = String(nick || '').trim();
     const before = this.players.length;
     this.players = this.players.filter(p => p.toLowerCase() !== normalized.toLowerCase());
     if (this.players.length === before) return { ok: false, reason: 'Nie znaleziono gracza.' };
     this.debounceWrite('players', () => this.players);
+    if (this.matchLogger) {
+      try {
+        this.matchLogger.deactivatePlayerByNickname(normalized);
+      } catch (err) {
+        console.error(`[STORAGE] sqlite player deactivate failed: ${err.message}`);
+      }
+    }
     return { ok: true, nick: normalized };
   }
 
