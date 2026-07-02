@@ -107,7 +107,15 @@ async function processMatches({ client, storage, faceit, defaultChannelId, eloCa
   const lastImageRef = { value: null };
 
   for (const matchId of uniqueMatchIds) {
-    if (storage.hasMatch(matchId) || matchLogger.checkIfMatchExists(matchId)) {
+    let matchExists = false;
+    try {
+      matchExists = matchLogger.checkIfMatchExists(matchId);
+    } catch (err) {
+      console.error(`[DB] fallback to JSON match check for ${matchId}: ${err.message}`);
+      matchExists = storage.hasLegacyMatch(matchId);
+    }
+    if (matchExists) {
+      console.log(`[DB] Duplicate match skipped: ${matchId}`);
       storage.addMatch(matchId);
       continue;
     }
@@ -198,14 +206,23 @@ async function processMatches({ client, storage, faceit, defaultChannelId, eloCa
         { name: 'MVP', value: mvp.nick || '?', inline: true }
       );
 
-    matchLogger.insertMatch({
-      match_id: matchId,
-      timestamp: rawTs,
-      map: mapName,
-      team_a_score: Number((round.round_stats?.Score || '0/0').split('/')[0]) || 0,
-      team_b_score: Number((round.round_stats?.Score || '0/0').split('/')[1]) || 0,
-      players: buildLoggedPlayers(round, mvp, trackedMap, eloByNick, teamResults)
-    });
+    try {
+      const inserted = matchLogger.insertMatch({
+        match_id: matchId,
+        timestamp: rawTs,
+        map: mapName,
+        team_a_score: Number((round.round_stats?.Score || '0/0').split('/')[0]) || 0,
+        team_b_score: Number((round.round_stats?.Score || '0/0').split('/')[1]) || 0,
+        players: buildLoggedPlayers(round, mvp, trackedMap, eloByNick, teamResults)
+      });
+      if (!inserted) {
+        storage.addMatch(matchId);
+        continue;
+      }
+    } catch (err) {
+      console.error(`[DB] match insert failed, continuing with legacy JSON fallback for ${matchId}: ${err.message}`);
+      if (storage.hasLegacyMatch(matchId)) continue;
+    }
 
     await channel.send({ content: message, embeds: [statsEmbed] });
 
