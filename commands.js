@@ -1,4 +1,6 @@
-const { SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
+const { AttachmentBuilder, EmbedBuilder, SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
+const { getPlayerEloHistory } = require('./services/eloService');
+const { generateEloChart } = require('./services/eloChart');
 
 function buildCommands() {
   return [
@@ -17,7 +19,16 @@ function buildCommands() {
     new SlashCommandBuilder()
       .setName('set_channel')
       .setDescription('Ustawia bieżący kanał jako kanał raportów')
-      .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+      .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+    new SlashCommandBuilder()
+      .setName('elo')
+      .setDescription('Pokazuje wykres historii ELO z zapisanych meczów')
+      .addStringOption(option =>
+        option.setName('player').setDescription('Nick lub FACEIT player_id').setRequired(false)
+      )
+      .addIntegerOption(option =>
+        option.setName('limit').setDescription('Liczba ostatnich meczów (domyślnie 30)').setMinValue(1).setMaxValue(100).setRequired(false)
+      )
   ];
 }
 
@@ -54,6 +65,48 @@ async function handleCommand(interaction, storage, { faceit, matchLogger } = {})
       message += `${prefix} <@${id}> ${count}\n`;
     });
     await interaction.reply({ content: message });
+    return;
+  }
+
+  if (commandName === 'elo') {
+    const requestedPlayer = interaction.options.getString('player');
+    const limit = interaction.options.getInteger('limit') || 30;
+    const activePlayers = matchLogger.getAllPlayers();
+    let player = null;
+
+    if (requestedPlayer) {
+      player = matchLogger.getPlayerByNickname(requestedPlayer) || matchLogger.getPlayerById(requestedPlayer);
+    } else {
+      player = activePlayers[0] || null;
+    }
+
+    if (!player || !player.active) {
+      await interaction.reply({ content: '⚠️ Nie znaleziono aktywnego gracza w SQLite.', ephemeral: true });
+      return;
+    }
+
+    const history = getPlayerEloHistory(player.player_id, limit);
+    if (!history.length) {
+      await interaction.reply({ content: `⚠️ Brak historii ELO dla ${player.nickname}.`, ephemeral: true });
+      return;
+    }
+
+    await interaction.deferReply();
+    const chartBuffer = await generateEloChart(history);
+    const currentElo = history[history.length - 1].elo;
+    const delta = currentElo - history[0].elo;
+    const attachment = new AttachmentBuilder(chartBuffer, { name: 'elo-chart.png' });
+    const embed = new EmbedBuilder()
+      .setTitle(`📈 ELO history - ${player.nickname}`)
+      .addFields(
+        { name: 'Current ELO', value: String(currentElo), inline: true },
+        { name: 'Change', value: `${delta >= 0 ? '+' : ''}${delta}`, inline: true },
+        { name: 'Matches', value: String(history.length), inline: true }
+      )
+      .setImage('attachment://elo-chart.png')
+      .setColor(delta >= 0 ? 0x2ecc71 : 0xe74c3c);
+
+    await interaction.editReply({ embeds: [embed], files: [attachment] });
     return;
   }
 
