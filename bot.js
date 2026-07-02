@@ -46,16 +46,10 @@ async function tick() {
 client.once('ready', async () => {
   console.log(`Zalogowano jako ${client.user.tag}`);
   try {
+    matchLogger.initDatabase();
+    await storage.syncLegacyPlayers(faceit);
     await registerCommands(client, GUILD_ID);
     console.log('[INFO] Komendy slash zarejestrowane.');
-    for (const nick of storage.getPlayers()) {
-      try {
-        const player = await faceit.getPlayer(nick);
-        storage.syncPlayer(player);
-      } catch (err) {
-        console.error(`[WARN] Nie udało się zsynchronizować gracza ${nick} do SQLite: ${err.message}`);
-      }
-    }
   } catch (err) {
     console.error(`[ERROR] Rejestracja komend nie powiodła się: ${err.message}`);
   }
