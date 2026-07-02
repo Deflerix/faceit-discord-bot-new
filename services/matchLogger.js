@@ -80,6 +80,16 @@ function initDatabase(dbPath = DB_PATH) {
     getMatchById: db.prepare('SELECT * FROM matches WHERE match_id = ? LIMIT 1'),
     getRecentMatches: db.prepare('SELECT * FROM matches ORDER BY timestamp DESC, id DESC LIMIT ?'),
     getAllMatches: db.prepare('SELECT * FROM matches ORDER BY timestamp DESC, id DESC'),
+    getPlayerEloHistory: db.prepare(`
+      SELECT
+        matches.timestamp AS timestamp,
+        json_extract(player.value, '$.elo_after') AS elo
+      FROM matches, json_each(matches.players) AS player
+      WHERE json_extract(player.value, '$.player_id') = ?
+        AND json_type(player.value, '$.elo_after') IN ('integer', 'real')
+      ORDER BY matches.timestamp DESC, matches.id DESC
+      LIMIT ?
+    `),
     upsertPlayer: db.prepare(`
       INSERT INTO players (player_id, nickname, added_at, active)
       VALUES (@player_id, @nickname, @added_at, @active)
@@ -88,6 +98,7 @@ function initDatabase(dbPath = DB_PATH) {
         active = excluded.active
     `),
     getAllPlayers: db.prepare('SELECT player_id, nickname, added_at, active FROM players WHERE active = 1 ORDER BY nickname COLLATE NOCASE'),
+    getPlayerById: db.prepare('SELECT player_id, nickname, added_at, active FROM players WHERE player_id = ? LIMIT 1'),
     getPlayerByNickname: db.prepare('SELECT player_id, nickname, added_at, active FROM players WHERE lower(nickname) = lower(?) LIMIT 1'),
     deactivatePlayerByNickname: db.prepare('UPDATE players SET active = 0 WHERE lower(nickname) = lower(?)')
   };
@@ -138,6 +149,18 @@ function getPlayerMatches(player_id) {
     .filter(row => row.players.some(player => String(player.player_id || '').toLowerCase() === needle));
 }
 
+function getPlayerEloHistoryRows(player_id, limit = 30) {
+  initDatabase();
+  const safeLimit = Math.max(1, Math.min(200, Number(limit) || 30));
+  return statements.getPlayerEloHistory.all(String(player_id || ''), safeLimit)
+    .filter(row => Number.isFinite(Number(row.elo)))
+    .map(row => ({
+      timestamp: Number(row.timestamp),
+      elo: Number(row.elo)
+    }))
+    .reverse();
+}
+
 function upsertPlayer(player) {
   initDatabase();
   if (!player?.player_id || !player?.nickname) return { ok: false, reason: 'missing player_id or nickname' };
@@ -166,6 +189,11 @@ function getPlayerByNickname(nickname) {
   return statements.getPlayerByNickname.get(String(nickname || '')) || null;
 }
 
+function getPlayerById(player_id) {
+  initDatabase();
+  return statements.getPlayerById.get(String(player_id || '')) || null;
+}
+
 function deactivatePlayerByNickname(nickname) {
   initDatabase();
   const result = statements.deactivatePlayerByNickname.run(String(nickname || ''));
@@ -180,10 +208,12 @@ module.exports = {
   checkIfMatchExists,
   getRecentMatches,
   getPlayerMatches,
+  getPlayerEloHistoryRows,
   fetchRecentMatches: getRecentMatches,
   fetchPlayerMatches: getPlayerMatches,
   upsertPlayer,
   getAllPlayers,
+  getPlayerById,
   getPlayerByNickname,
   deactivatePlayerByNickname
 };
