@@ -46,11 +46,22 @@ class Storage {
     this.timers.set(key, timer);
   }
 
-  getPlayers() {
+  getLegacyPlayers() {
     return [...this.players];
   }
 
-  addPlayer(nick) {
+  getPlayers() {
+    if (this.matchLogger) {
+      try {
+        return this.matchLogger.getAllPlayers().map(player => player.nickname);
+      } catch (err) {
+        console.error(`[STORAGE] fallback to JSON players: ${err.message}`);
+      }
+    }
+    return this.getLegacyPlayers();
+  }
+
+  addPlayerLegacy(nick) {
     const normalized = String(nick || '').trim();
     if (!normalized) return { ok: false, reason: 'Nick jest pusty.' };
     const exists = this.players.some(p => p.toLowerCase() === normalized.toLowerCase());
@@ -60,33 +71,33 @@ class Storage {
     return { ok: true, nick: normalized };
   }
 
-  syncPlayer(player) {
-    if (!this.matchLogger) return;
-    try {
-      this.matchLogger.upsertPlayer({
-        player_id: player.player_id,
-        nickname: player.nickname,
-        active: true
-      });
-    } catch (err) {
-      console.error(`[STORAGE] sqlite player sync failed: ${err.message}`);
-    }
-  }
-
-  removePlayer(nick) {
+  removePlayerLegacy(nick) {
     const normalized = String(nick || '').trim();
     const before = this.players.length;
     this.players = this.players.filter(p => p.toLowerCase() !== normalized.toLowerCase());
     if (this.players.length === before) return { ok: false, reason: 'Nie znaleziono gracza.' };
     this.debounceWrite('players', () => this.players);
-    if (this.matchLogger) {
+    return { ok: true, nick: normalized };
+  }
+
+  async syncLegacyPlayers(faceit) {
+    if (!this.matchLogger) return;
+    const existing = new Set(this.matchLogger.getAllPlayers().map(player => player.nickname.toLowerCase()));
+    for (const nick of this.getLegacyPlayers()) {
+      if (existing.has(nick.toLowerCase())) continue;
       try {
-        this.matchLogger.deactivatePlayerByNickname(normalized);
+        const player = await faceit.getPlayer(nick);
+        this.matchLogger.upsertPlayer({
+          player_id: player.player_id,
+          nickname: player.nickname || nick,
+          active: true
+        });
+        existing.add((player.nickname || nick).toLowerCase());
+        console.log(`[DB] Legacy player synced: ${player.nickname || nick}`);
       } catch (err) {
-        console.error(`[STORAGE] sqlite player deactivate failed: ${err.message}`);
+        console.error(`[STORAGE] legacy player sync failed for ${nick}: ${err.message}`);
       }
     }
-    return { ok: true, nick: normalized };
   }
 
   getChannelId(fallback) {
@@ -98,7 +109,7 @@ class Storage {
     this.debounceWrite('config', () => this.config);
   }
 
-  hasMatch(matchId) {
+  hasLegacyMatch(matchId) {
     return this.checkedMatches.has(matchId);
   }
 
