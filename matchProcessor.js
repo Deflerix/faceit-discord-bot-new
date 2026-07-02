@@ -1,4 +1,5 @@
 const { EmbedBuilder } = require('discord.js');
+const { getReportAchievements } = require('./services/reportAchievements');
 
 const CORE_PLAYERS = ['deflerix', 'w4kky', 'pawik100737'];
 
@@ -26,8 +27,12 @@ function getTeamScore(round, ourTeam) {
 }
 
 function getTopFragger(players = []) {
-  const coreOnly = players.filter(p => CORE_PLAYERS.includes((p.nickname || '').toLowerCase()));
+  const coreOnly = players.filter(p =>
+    CORE_PLAYERS.includes((p.nickname || '').toLowerCase())
+  );
+
   const pool = coreOnly.length ? coreOnly : players;
+
   return pool.reduce((best, p) => {
     const kills = Number(p.player_stats?.Kills ?? 0);
     return kills > best.kills ? { nick: p.nickname || '?', kills } : best;
@@ -51,7 +56,11 @@ function getRandomImage(isWin, lastImageRef) {
 
 function toDateText(unixTs) {
   return new Date(unixTs * 1000).toLocaleString('pl-PL', {
-    day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit'
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
   });
 }
 
@@ -61,26 +70,30 @@ function getStatNumber(player, statName, fallback = 0) {
   return Number.isFinite(value) ? value : fallback;
 }
 
-function buildLoggedPlayers(round, mvp, trackedMap, eloByNick, teamResults) {
-  return (round.teams || []).flatMap(team => (team.players || []).map(player => {
-    const lowerNick = (player.nickname || '').toLowerCase();
-    const displayNick = trackedMap.get(lowerNick) || player.nickname || '?';
-    const elo = eloByNick.get(lowerNick) || { before: 0, after: 0, delta: 0 };
-    return {
-      player_id: player.player_id || '',
-      nickname: displayNick,
-      kills: getStatNumber(player, 'Kills'),
-      deaths: getStatNumber(player, 'Deaths'),
-      assists: getStatNumber(player, 'Assists'),
-      hs: getStatNumber(player, 'Headshots %'),
-      kd: getStatNumber(player, 'K/D Ratio'),
-      mvp: (player.nickname || '').toLowerCase() === (mvp.nick || '').toLowerCase(),
-      elo_before: elo.before,
-      elo_after: elo.after,
-      elo_delta: elo.delta,
-      result: teamResults.get(team) || 'loss'
-    };
-  }));
+function buildLoggedPlayers(round, mvp, trackedMap, eloByNick, teamResults, isWin) {
+  return (round.teams || []).flatMap(team =>
+    (team.players || []).map(player => {
+      const lowerNick = (player.nickname || '').toLowerCase();
+      const displayNick = trackedMap.get(lowerNick) || player.nickname || '?';
+
+      const elo = eloByNick.get(lowerNick) || { before: 0, after: 0, delta: 0 };
+
+      return {
+        player_id: player.player_id || '',
+        nickname: displayNick,
+        kills: getStatNumber(player, 'Kills'),
+        deaths: getStatNumber(player, 'Deaths'),
+        assists: getStatNumber(player, 'Assists'),
+        hs: getStatNumber(player, 'Headshots %'),
+        kd: getStatNumber(player, 'K/D Ratio'),
+        mvp: (player.nickname || '').toLowerCase() === (mvp.nick || '').toLowerCase(),
+        elo_before: elo.before,
+        elo_after: elo.after,
+        elo_delta: elo.delta,
+        result: isWin ? 'win' : 'loss'
+      };
+    })
+  );
 }
 
 async function processMatches({ client, storage, faceit, defaultChannelId, eloCache, matchLogger }) {
@@ -107,13 +120,15 @@ async function processMatches({ client, storage, faceit, defaultChannelId, eloCa
   const lastImageRef = { value: null };
 
   for (const matchId of uniqueMatchIds) {
+
     let matchExists = false;
     try {
       matchExists = matchLogger.checkIfMatchExists(matchId);
     } catch (err) {
-      console.error(`[DB] fallback to JSON match check for ${matchId}: ${err.message}`);
+      console.error(`[DB] fallback JSON check ${matchId}: ${err.message}`);
       matchExists = storage.hasLegacyMatch(matchId);
     }
+
     if (matchExists) {
       console.log(`[DB] Duplicate match skipped: ${matchId}`);
       storage.addMatch(matchId);
@@ -125,35 +140,49 @@ async function processMatches({ client, storage, faceit, defaultChannelId, eloCa
     if (!round) continue;
 
     const allRoundPlayers = (round.teams || []).flatMap(t => t.players || []);
-    const activeTracked = allRoundPlayers.filter(p => trackedMap.has((p.nickname || '').toLowerCase()));
+    const activeTracked = allRoundPlayers.filter(p =>
+      trackedMap.has((p.nickname || '').toLowerCase())
+    );
+
     if (!activeTracked.length) continue;
 
     const ourTeam = (round.teams || []).find(t =>
-      (t.players || []).some(p => trackedMap.has((p.nickname || '').toLowerCase()))
+      (t.players || []).some(p =>
+        trackedMap.has((p.nickname || '').toLowerCase())
+      )
     );
+
     if (!ourTeam) continue;
 
     const enemyTeam = (round.teams || []).find(t => t !== ourTeam) || { players: [] };
+
     const { our, enemy } = getTeamScore(round, ourTeam);
     const isWin = our > enemy;
+
     const resultText = `${isWin ? '🟢 WIN' : '🔴 LOSE'} | ${our}:${enemy}`;
-    const teamResults = new Map((round.teams || []).map(team => {
-      const { our: teamScore, enemy: opposingScore } = getTeamScore(round, team);
-      return [team, teamScore > opposingScore ? 'win' : 'loss'];
-    }));
+
+    const teamResults = new Map(
+      (round.teams || []).map(team => {
+        const { our: a, enemy: b } = getTeamScore(round, team);
+        return [team, a > b ? 'win' : 'loss'];
+      })
+    );
 
     const mvp = getTopFragger(ourTeam.players || []);
 
     let eloLines = '';
     const eloByNick = new Map();
+
     for (const nick of trackedPlayers) {
       try {
         const p = await faceit.getPlayer(nick, { forceRefresh: true, ctx: tickCtx });
         const elo = Number(p.games?.cs2?.faceit_elo ?? 0);
         const prev = Number.isFinite(Number(eloCache[nick])) ? Number(eloCache[nick]) : elo;
-        const prevLabel = eloCache[nick] ?? 'X';
-        eloLines += `- ${nick} ${prevLabel} → ${elo}\n`;
+
+        eloLines += `- ${nick} ${eloCache[nick] ?? 'X'} → ${elo}\n`;
+
         eloCache[nick] = elo;
+
         eloByNick.set(nick.toLowerCase(), {
           before: prev,
           after: elo,
@@ -166,22 +195,55 @@ async function processMatches({ client, storage, faceit, defaultChannelId, eloCa
 
     const streakLines = activeTracked.map(p => {
       const displayNick = trackedMap.get((p.nickname || '').toLowerCase()) || p.nickname;
+
       const playerTeam = (round.teams || []).find(team =>
-        (team.players || []).some(teamPlayer => (teamPlayer.nickname || '').toLowerCase() === (p.nickname || '').toLowerCase())
+        (team.players || []).some(tp =>
+          (tp.nickname || '').toLowerCase() === (p.nickname || '').toLowerCase()
+        )
       );
+
       const streakType = teamResults.get(playerTeam) === 'win' ? 'win' : 'lose';
       const streak = storage.updateStreak(displayNick, streakType);
+
       return `🔥 STREAK ${streak.type.toUpperCase()} ${streak.count} (${displayNick})`;
     });
+
+    // 🏅 ACHIEVEMENTS (NOWE)
+    const achievementLines = [];
+
+    for (const p of activeTracked) {
+      const nickLower = (p.nickname || '').toLowerCase();
+      const displayNick = trackedMap.get(nickLower) || p.nickname || '?';
+
+      const elo = eloByNick.get(nickLower) || { delta: 0 };
+
+      const playerObj = {
+        nickname: displayNick,
+        kills: getStatNumber(p, 'Kills'),
+        deaths: getStatNumber(p, 'Deaths'),
+        assists: getStatNumber(p, 'Assists'),
+        hs: getStatNumber(p, 'Headshots %'),
+        kd: getStatNumber(p, 'K/D Ratio'),
+        mvp: (mvp.nick || '').toLowerCase() === nickLower,
+        elo_delta: elo.delta,
+        result: isWin ? 'win' : 'loss'
+      };
+
+      const badges = getReportAchievements(playerObj);
+
+      if (badges.length) {
+        achievementLines.push(`${displayNick} - ${badges.join(' • ')}`);
+      }
+    }
 
     const mentions = activeTracked
       .map(p => trackedMap.get((p.nickname || '').toLowerCase()) || p.nickname)
       .map(getMention)
       .join(' ');
 
-    const rawTs = lastMatches.find(m => m?.match_id === matchId)?.finished_at
-      || lastMatches.find(m => m?.match_id === matchId)?.started_at
-      || Math.floor(Date.now() / 1000);
+    const rawTs =
+      lastMatches.find(m => m?.match_id === matchId)?.finished_at ||
+      Math.floor(Date.now() / 1000);
 
     const dateText = toDateText(rawTs);
     const mapName = round.round_stats?.Map || '-';
@@ -191,6 +253,10 @@ async function processMatches({ client, storage, faceit, defaultChannelId, eloCa
       `📅 Data: ${dateText}`,
       resultText,
       ...streakLines,
+      '',
+      `🏅 ACHIEVEMENTS:`,
+      achievementLines.length ? achievementLines.join('\n') : 'brak',
+      '',
       `🌍 Mapa: ${mapName}`,
       '',
       '📈 ELO:',
@@ -213,14 +279,15 @@ async function processMatches({ client, storage, faceit, defaultChannelId, eloCa
         map: mapName,
         team_a_score: Number((round.round_stats?.Score || '0/0').split('/')[0]) || 0,
         team_b_score: Number((round.round_stats?.Score || '0/0').split('/')[1]) || 0,
-        players: buildLoggedPlayers(round, mvp, trackedMap, eloByNick, teamResults)
+        players: buildLoggedPlayers(round, mvp, trackedMap, eloByNick, teamResults, isWin)
       });
+
       if (!inserted) {
         storage.addMatch(matchId);
         continue;
       }
     } catch (err) {
-      console.error(`[DB] match insert failed, continuing with legacy JSON fallback for ${matchId}: ${err.message}`);
+      console.error(`[DB] insert failed ${matchId}: ${err.message}`);
       if (storage.hasLegacyMatch(matchId)) continue;
     }
 
