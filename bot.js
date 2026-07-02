@@ -5,6 +5,7 @@ const { Storage } = require('./storage');
 const { createFaceitService } = require('./faceit');
 const { processMatches } = require('./matchProcessor');
 const { registerCommands, handleCommand } = require('./commands');
+const matchLogger = require('./services/matchLogger');
 
 const {
   DISCORD_TOKEN,
@@ -17,7 +18,7 @@ const {
 } = process.env;
 
 const fallbackPlayers = (FACEIT_NICKS || '').split(',').map(v => v.trim()).filter(Boolean);
-const storage = new Storage({ playersFromEnv: fallbackPlayers });
+const storage = new Storage({ playersFromEnv: fallbackPlayers, matchLogger });
 const faceit = createFaceitService(FACEIT_API_KEY);
 const eloCache = {};
 
@@ -34,7 +35,8 @@ async function tick() {
       storage,
       faceit,
       defaultChannelId: CHANNEL_ID,
-      eloCache
+      eloCache,
+      matchLogger
     });
   } catch (err) {
     console.error(`[TICK ERROR] ${err.message}`);
@@ -46,6 +48,14 @@ client.once('ready', async () => {
   try {
     await registerCommands(client, GUILD_ID);
     console.log('[INFO] Komendy slash zarejestrowane.');
+    for (const nick of storage.getPlayers()) {
+      try {
+        const player = await faceit.getPlayer(nick);
+        storage.syncPlayer(player);
+      } catch (err) {
+        console.error(`[WARN] Nie udało się zsynchronizować gracza ${nick} do SQLite: ${err.message}`);
+      }
+    }
   } catch (err) {
     console.error(`[ERROR] Rejestracja komend nie powiodła się: ${err.message}`);
   }
@@ -57,7 +67,7 @@ client.once('ready', async () => {
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
   try {
-    await handleCommand(interaction, storage);
+    await handleCommand(interaction, storage, { faceit, matchLogger });
   } catch (err) {
     console.error(`[COMMAND ERROR] ${err.message}`);
     if (!interaction.replied && !interaction.deferred) {
