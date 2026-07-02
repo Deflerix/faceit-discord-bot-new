@@ -63,28 +63,48 @@ async function handleCommand(interaction, storage, { faceit, matchLogger } = {})
   }
 
   if (commandName === 'add_player') {
-    const nick = interaction.options.getString('nick', true);
-    const result = storage.addPlayer(nick);
-    if (result.ok && faceit && matchLogger) {
-      try {
-        const player = await faceit.getPlayer(result.nick, { forceRefresh: true });
-        matchLogger.upsertPlayer({
-          player_id: player.player_id,
-          nickname: player.nickname || result.nick,
-          active: true
-        });
-      } catch (err) {
-        console.error(`[COMMAND] SQLite player upsert failed for ${result.nick}: ${err.message}`);
+    const nick = interaction.options.getString('nick', true).trim();
+    try {
+      const existing = matchLogger.getPlayerByNickname(nick);
+      if (existing?.active) {
+        await interaction.reply({ content: '⚠️ Gracz już istnieje.', ephemeral: true });
+        return;
       }
+
+      const player = await faceit.getPlayer(nick, { forceRefresh: true });
+      const result = matchLogger.upsertPlayer({
+        player_id: player.player_id,
+        nickname: player.nickname || nick,
+        active: true
+      });
+      if (!result.ok) {
+        await interaction.reply({ content: `⚠️ Nie udało się dodać gracza: ${result.reason || 'błąd DB'}`, ephemeral: true });
+        return;
+      }
+
+      storage.addPlayerLegacy(player.nickname || nick);
+      await interaction.reply({ content: `✅ Dodano gracza: ${player.nickname || nick}`, ephemeral: true });
+    } catch (err) {
+      console.error(`[COMMAND] add_player DB primary failed: ${err.message}`);
+      await interaction.reply({ content: `❌ Nie udało się dodać gracza: ${err.message}`, ephemeral: true });
     }
-    await interaction.reply({ content: result.ok ? `✅ Dodano gracza: ${result.nick}` : `⚠️ ${result.reason}`, ephemeral: true });
     return;
   }
 
   if (commandName === 'remove_player') {
-    const nick = interaction.options.getString('nick', true);
-    const result = storage.removePlayer(nick);
-    await interaction.reply({ content: result.ok ? `✅ Usunięto gracza: ${result.nick}` : `⚠️ ${result.reason}`, ephemeral: true });
+    const nick = interaction.options.getString('nick', true).trim();
+    try {
+      const removed = matchLogger.deactivatePlayerByNickname(nick);
+      if (!removed) {
+        await interaction.reply({ content: '⚠️ Nie znaleziono gracza.', ephemeral: true });
+        return;
+      }
+      storage.removePlayerLegacy(nick);
+      await interaction.reply({ content: `✅ Usunięto gracza: ${nick}`, ephemeral: true });
+    } catch (err) {
+      console.error(`[COMMAND] remove_player DB primary failed: ${err.message}`);
+      await interaction.reply({ content: `❌ Nie udało się usunąć gracza: ${err.message}`, ephemeral: true });
+    }
     return;
   }
 
