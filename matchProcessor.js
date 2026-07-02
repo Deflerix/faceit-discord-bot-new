@@ -7,21 +7,15 @@ function getMention(nick) {
   return id ? `<@${id}>` : nick;
 }
 
-function formatPlayerStats(players = [], mvpNick = null) {
+function formatPlayerStats(players = []) {
   return players.map(p => {
     const s = p.player_stats || {};
     const kd = Number(s['K/D Ratio'] ?? 0);
     const kills = s.Kills ?? '-';
     const deaths = s.Deaths ?? '-';
     const hs = s['Headshots %'] ?? '-';
-
-    let nick = (p.nickname || '?').slice(0, 12);
-
-    if (mvpNick && p.nickname === mvpNick) {
-      nick = `👑 ${nick}`;
-    }
-
-    return `${nick.padEnd(14)} | ${kills}/${deaths} | KD:${kd.toFixed(2)} | HS:${hs}`;
+    const nick = (p.nickname || '?').slice(0, 12);
+    return `${nick.padEnd(12)} | ${kills}/${deaths} | KD:${kd.toFixed(2)} | HS:${hs}`;
   }).join('\n');
 }
 
@@ -31,48 +25,13 @@ function getTeamScore(round, ourTeam) {
   return ourTeam === team1 ? { our: s1, enemy: s2 } : { our: s2, enemy: s1 };
 }
 
-function getCorePlayers(players = []) {
-  return players.filter(p =>
-    CORE_PLAYERS.includes((p.nickname || '').toLowerCase())
-  );
-}
-
-// MVP z całego meczu
-function getMVPFromMatch(round) {
-  const allPlayers = (round.teams || []).flatMap(t => t.players || []);
-
-  return allPlayers.reduce((best, p) => {
-    const kills = Number(p.player_stats?.Kills ?? 0);
-    return kills > best.kills ? { nick: p.nickname, kills } : best;
-  }, { nick: null, kills: -1 });
-}
-
-// GOAT (tylko core jeśli są)
-function getGoat(players = []) {
-  const core = getCorePlayers(players);
-  const pool = core.length ? core : players;
-
+function getTopFragger(players = []) {
+  const coreOnly = players.filter(p => CORE_PLAYERS.includes((p.nickname || '').toLowerCase()));
+  const pool = coreOnly.length ? coreOnly : players;
   return pool.reduce((best, p) => {
     const kills = Number(p.player_stats?.Kills ?? 0);
-    return kills > best.kills ? { nick: p.nickname, kills } : best;
-  }, { nick: null, kills: -1 });
-}
-
-// PROFESORE (najmniej killów)
-function getProfesore(players = []) {
-  const core = getCorePlayers(players);
-  const pool = core.length ? core : players;
-
-  return pool.reduce((worst, p) => {
-    const kills = Number(p.player_stats?.Kills ?? 0);
-    return kills < worst.kills ? { nick: p.nickname, kills } : worst;
-  }, { nick: null, kills: Infinity });
-}
-
-// czy gra cała trójka
-function isFullTeamPlaying(players = []) {
-  const lower = players.map(p => (p.nickname || '').toLowerCase());
-  return CORE_PLAYERS.every(nick => lower.includes(nick));
+    return kills > best.kills ? { nick: p.nickname || '?', kills } : best;
+  }, { nick: '?', kills: -1 });
 }
 
 function getRandomImage(isWin, lastImageRef) {
@@ -92,15 +51,39 @@ function getRandomImage(isWin, lastImageRef) {
 
 function toDateText(unixTs) {
   return new Date(unixTs * 1000).toLocaleString('pl-PL', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
+    day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit'
   });
 }
 
-async function processMatches({ client, storage, faceit, defaultChannelId, eloCache }) {
+function getStatNumber(player, statName, fallback = 0) {
+  const raw = player?.player_stats?.[statName];
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function buildLoggedPlayers(round, mvp, trackedMap, eloByNick, teamResults) {
+  return (round.teams || []).flatMap(team => (team.players || []).map(player => {
+    const lowerNick = (player.nickname || '').toLowerCase();
+    const displayNick = trackedMap.get(lowerNick) || player.nickname || '?';
+    const elo = eloByNick.get(lowerNick) || { before: 0, after: 0, delta: 0 };
+    return {
+      player_id: player.player_id || '',
+      nickname: displayNick,
+      kills: getStatNumber(player, 'Kills'),
+      deaths: getStatNumber(player, 'Deaths'),
+      assists: getStatNumber(player, 'Assists'),
+      hs: getStatNumber(player, 'Headshots %'),
+      kd: getStatNumber(player, 'K/D Ratio'),
+      mvp: (player.nickname || '').toLowerCase() === (mvp.nick || '').toLowerCase(),
+      elo_before: elo.before,
+      elo_after: elo.after,
+      elo_delta: elo.delta,
+      result: teamResults.get(team) || 'loss'
+    };
+  }));
+}
+
+async function processMatches({ client, storage, faceit, defaultChannelId, eloCache, matchLogger }) {
   const trackedPlayers = storage.getPlayers();
   if (!trackedPlayers.length) return;
 
@@ -124,70 +107,73 @@ async function processMatches({ client, storage, faceit, defaultChannelId, eloCa
   const lastImageRef = { value: null };
 
   for (const matchId of uniqueMatchIds) {
-    if (storage.hasMatch(matchId)) continue;
+    if (storage.hasMatch(matchId) || matchLogger.checkIfMatchExists(matchId)) {
+      storage.addMatch(matchId);
+      continue;
+    }
 
     const stats = await faceit.getMatchStats(matchId, { ctx: tickCtx });
     const round = stats?.rounds?.[0];
     if (!round) continue;
 
     const allRoundPlayers = (round.teams || []).flatMap(t => t.players || []);
-    const activeTracked = allRoundPlayers.filter(p =>
-      trackedMap.has((p.nickname || '').toLowerCase())
-    );
+    const activeTracked = allRoundPlayers.filter(p => trackedMap.has((p.nickname || '').toLowerCase()));
     if (!activeTracked.length) continue;
 
     const ourTeam = (round.teams || []).find(t =>
-      (t.players || []).some(p =>
-        trackedMap.has((p.nickname || '').toLowerCase())
-      )
+      (t.players || []).some(p => trackedMap.has((p.nickname || '').toLowerCase()))
     );
     if (!ourTeam) continue;
 
     const enemyTeam = (round.teams || []).find(t => t !== ourTeam) || { players: [] };
-
     const { our, enemy } = getTeamScore(round, ourTeam);
     const isWin = our > enemy;
-    const resultType = isWin ? 'win' : 'lose';
     const resultText = `${isWin ? '🟢 WIN' : '🔴 LOSE'} | ${our}:${enemy}`;
+    const teamResults = new Map((round.teams || []).map(team => {
+      const { our: teamScore, enemy: opposingScore } = getTeamScore(round, team);
+      return [team, teamScore > opposingScore ? 'win' : 'loss'];
+    }));
 
-    const mvp = getMVPFromMatch(round);
-    const goat = getGoat(ourTeam.players);
-    const profesore = getProfesore(ourTeam.players);
-
-    let streakText = '';
-    if (isFullTeamPlaying(ourTeam.players)) {
-      const streak = storage.updateStreak('team', resultType);
-      streakText = `🔥 STREAK ${streak.type.toUpperCase()} ${streak.count}`;
-    }
+    const mvp = getTopFragger(ourTeam.players || []);
 
     let eloLines = '';
+    const eloByNick = new Map();
     for (const nick of trackedPlayers) {
       try {
         const p = await faceit.getPlayer(nick, { forceRefresh: true, ctx: tickCtx });
         const elo = Number(p.games?.cs2?.faceit_elo ?? 0);
-        const prev = eloCache[nick] ?? 'X';
-        eloLines += `- ${nick} ${prev} → ${elo}\n`;
+        const prev = Number.isFinite(Number(eloCache[nick])) ? Number(eloCache[nick]) : elo;
+        const prevLabel = eloCache[nick] ?? 'X';
+        eloLines += `- ${nick} ${prevLabel} → ${elo}\n`;
         eloCache[nick] = elo;
+        eloByNick.set(nick.toLowerCase(), {
+          before: prev,
+          after: elo,
+          delta: elo - prev
+        });
       } catch {
         eloLines += `- ${nick} brak danych\n`;
       }
     }
 
-    let mentions = '';
-    if (isFullTeamPlaying(ourTeam.players)) {
-      const roleId = process.env.CORE_ROLE_ID;
-      mentions = roleId ? `<@&${roleId}>` : 'CORE';
-    } else {
-      mentions = activeTracked
-        .map(p => trackedMap.get((p.nickname || '').toLowerCase()) || p.nickname)
-        .map(getMention)
-        .join(' ');
-    }
+    const streakLines = activeTracked.map(p => {
+      const displayNick = trackedMap.get((p.nickname || '').toLowerCase()) || p.nickname;
+      const playerTeam = (round.teams || []).find(team =>
+        (team.players || []).some(teamPlayer => (teamPlayer.nickname || '').toLowerCase() === (p.nickname || '').toLowerCase())
+      );
+      const streakType = teamResults.get(playerTeam) === 'win' ? 'win' : 'lose';
+      const streak = storage.updateStreak(displayNick, streakType);
+      return `🔥 STREAK ${streak.type.toUpperCase()} ${streak.count} (${displayNick})`;
+    });
 
-    const rawTs =
-      lastMatches.find(m => m?.match_id === matchId)?.finished_at ||
-      lastMatches.find(m => m?.match_id === matchId)?.started_at ||
-      Math.floor(Date.now() / 1000);
+    const mentions = activeTracked
+      .map(p => trackedMap.get((p.nickname || '').toLowerCase()) || p.nickname)
+      .map(getMention)
+      .join(' ');
+
+    const rawTs = lastMatches.find(m => m?.match_id === matchId)?.finished_at
+      || lastMatches.find(m => m?.match_id === matchId)?.started_at
+      || Math.floor(Date.now() / 1000);
 
     const dateText = toDateText(rawTs);
     const mapName = round.round_stats?.Map || '-';
@@ -196,31 +182,30 @@ async function processMatches({ client, storage, faceit, defaultChannelId, eloCa
       `📊 Raport ${mentions}`,
       `📅 Data: ${dateText}`,
       resultText,
-      streakText,
+      ...streakLines,
       `🌍 Mapa: ${mapName}`,
-      '',
-      goat ? `🐐 GOAT: ${goat.nick} (${goat.kills})` : '',
-      profesore ? `🚑 PROFESORE: ${profesore.nick} (${profesore.kills})` : '',
       '',
       '📈 ELO:',
       eloLines.trimEnd()
-    ]
-    .join('\n');
+    ].join('\n');
 
     const statsEmbed = new EmbedBuilder()
       .setColor(isWin ? 0x2ecc71 : 0xe74c3c)
       .setTitle('📋 Statystyki meczu')
       .addFields(
-        {
-          name: 'OUR',
-          value: `\`\`\`\n${formatPlayerStats(ourTeam.players, mvp?.nick)}\n\`\`\``
-        },
-        {
-          name: 'ENEMY',
-          value: `\`\`\`\n${formatPlayerStats(enemyTeam.players, mvp?.nick)}\n\`\`\``
-        },
-        ...(mvp ? [{ name: 'MVP', value: `👑 ${mvp.nick}`, inline: true }] : [])
+        { name: 'OUR', value: `\`\`\`\n${formatPlayerStats(ourTeam.players)}\n\`\`\`` },
+        { name: 'ENEMY', value: `\`\`\`\n${formatPlayerStats(enemyTeam.players)}\n\`\`\`` },
+        { name: 'MVP', value: mvp.nick || '?', inline: true }
       );
+
+    matchLogger.insertMatch({
+      match_id: matchId,
+      timestamp: rawTs,
+      map: mapName,
+      team_a_score: Number((round.round_stats?.Score || '0/0').split('/')[0]) || 0,
+      team_b_score: Number((round.round_stats?.Score || '0/0').split('/')[1]) || 0,
+      players: buildLoggedPlayers(round, mvp, trackedMap, eloByNick, teamResults)
+    });
 
     await channel.send({ content: message, embeds: [statsEmbed] });
 
