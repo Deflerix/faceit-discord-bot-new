@@ -1,4 +1,5 @@
 const { EmbedBuilder } = require('discord.js');
+const { getReportAchievements } = require('./services/reportAchievements');
 
 const CORE_PLAYERS = ['deflerix', 'w4kky', 'pawik100737'];
 
@@ -15,7 +16,6 @@ function formatPlayerStats(players = []) {
     const deaths = s.Deaths ?? '-';
     const hs = s['Headshots %'] ?? '-';
     const nick = (p.nickname || '?').slice(0, 12);
-
     return `${nick.padEnd(12)} | ${kills}/${deaths} | KD:${kd.toFixed(2)} | HS:${hs}`;
   }).join('\n');
 }
@@ -62,7 +62,7 @@ function toDateText(unixTs) {
 }
 
 /* =========================
-   🔥 IMAGE SYSTEM (PRZYWRÓCONE)
+   IMAGE SYSTEM (UNCHANGED)
 ========================= */
 function getRandomImage(isWin, lastImageRef) {
   const images = isWin
@@ -77,7 +77,6 @@ function getRandomImage(isWin, lastImageRef) {
 
   const selected = pool[Math.floor(Math.random() * pool.length)];
   lastImageRef.value = selected;
-
   return selected;
 }
 
@@ -117,12 +116,10 @@ async function processMatches({
     try {
       matchExists = matchLogger.checkIfMatchExists(matchId);
     } catch (err) {
-      console.error(`[DB] fallback to JSON match check for ${matchId}: ${err.message}`);
       matchExists = storage.hasLegacyMatch(matchId);
     }
 
     if (matchExists) {
-      console.log(`[DB] Duplicate match skipped: ${matchId}`);
       storage.addMatch(matchId);
       continue;
     }
@@ -139,14 +136,13 @@ async function processMatches({
     if (!activeTracked.length) continue;
 
     const ourTeam = (round.teams || []).find(t =>
-      (t.players || []).some(p =>
+      t.players?.some(p =>
         trackedMap.has((p.nickname || '').toLowerCase())
       )
     );
 
     if (!ourTeam) continue;
 
-    /* 🔧 FIX SAFE ENEMY TEAM (bez crashy) */
     const enemyTeam = (round.teams || []).find(t => t !== ourTeam) || { players: [] };
 
     const { our, enemy } = getTeamScore(round, ourTeam);
@@ -154,17 +150,10 @@ async function processMatches({
 
     const resultText = `${isWin ? '🟢 WIN' : '🔴 LOSE'} | ${our}:${enemy}`;
 
-    const teamResults = new Map(
-      (round.teams || []).map(team => {
-        const { our: a, enemy: b } = getTeamScore(round, team);
-        return [team, a > b ? 'win' : 'loss'];
-      })
-    );
-
     const mvp = getTopFragger(ourTeam.players || []);
 
     /* =========================
-       ELO
+       ELO + LVL
     ========================== */
     let eloLines = '';
     const eloByNick = new Map();
@@ -172,10 +161,13 @@ async function processMatches({
     for (const nick of trackedPlayers) {
       try {
         const p = await faceit.getPlayer(nick, { forceRefresh: true, ctx: tickCtx });
+
         const elo = Number(p.games?.cs2?.faceit_elo ?? 0);
+        const lvl = p.games?.cs2?.skill_level ?? '?';
+
         const prev = Number.isFinite(Number(eloCache[nick])) ? Number(eloCache[nick]) : elo;
 
-        eloLines += `- ${nick} ${eloCache[nick] ?? 'X'} → ${elo}\n`;
+        eloLines += `- ${nick} (lvl ${lvl}) ${eloCache[nick] ?? 'X'} → ${elo}\n`;
 
         eloCache[nick] = elo;
 
@@ -184,33 +176,55 @@ async function processMatches({
           after: elo,
           delta: elo - prev
         });
+
       } catch {
         eloLines += `- ${nick} brak danych\n`;
       }
     }
 
     /* =========================
-       STREAK (ORIGINAL BEHAVIOR)
+       STREAK (FIXED - 1 LINE)
     ========================== */
-    const streakLines = activeTracked.map(p => {
-      const displayNick = trackedMap.get((p.nickname || '').toLowerCase()) || p.nickname;
+    const anchor = activeTracked[0];
+    const anchorNick = (anchor.nickname || '').toLowerCase();
 
-      const playerTeam = (round.teams || []).find(t =>
-        (t.players || []).some(tp =>
-          (tp.nickname || '').toLowerCase() === (p.nickname || '').toLowerCase()
-        )
-      );
+    const streakType = isWin ? 'win' : 'lose';
+    const streak = storage.updateStreak(anchorNick, streakType);
 
-      const streakType =
-        playerTeam && teamResults.get(playerTeam) === 'win' ? 'win' : 'lose';
-
-      const streak = storage.updateStreak(displayNick, streakType);
-
-      return `🔥 STREAK ${streak.type.toUpperCase()} ${streak.count} (${displayNick})`;
-    });
+    const streakLine = `🔥 STREAK ${streak.type.toUpperCase()} ${streak.count}`;
 
     /* =========================
-       CORE ROLE PING FIX
+       ACHIEVEMENTS (RESTORED)
+    ========================== */
+    const achievementLines = [];
+
+    for (const p of activeTracked) {
+      const nickLower = (p.nickname || '').toLowerCase();
+      const displayNick = trackedMap.get(nickLower) || p.nickname || '?';
+
+      const elo = eloByNick.get(nickLower) || { delta: 0 };
+
+      const playerObj = {
+        nickname: displayNick,
+        kills: getStatNumber(p, 'Kills'),
+        deaths: getStatNumber(p, 'Deaths'),
+        assists: getStatNumber(p, 'Assists'),
+        hs: getStatNumber(p, 'Headshots %'),
+        kd: getStatNumber(p, 'K/D Ratio'),
+        mvp: (mvp.nick || '').toLowerCase() === nickLower,
+        elo_delta: elo.delta,
+        result: isWin ? 'win' : 'loss'
+      };
+
+      const badges = getReportAchievements(playerObj);
+
+      if (badges.length) {
+        achievementLines.push(`${displayNick} - ${badges.join(' • ')}`);
+      }
+    }
+
+    /* =========================
+       PING SYSTEM (CORE ROLE)
     ========================== */
     const activeNicknames = activeTracked.map(p =>
       (p.nickname || '').toLowerCase()
@@ -241,7 +255,7 @@ async function processMatches({
     const mapName = round.round_stats?.Map || '-';
 
     /* =========================
-       MESSAGE (BEZ ZMIAN FLOW)
+       FINAL MESSAGE
     ========================== */
     const message = [
       `📊 Raport ${mentions}`,
@@ -249,7 +263,10 @@ async function processMatches({
       resultText,
       `🌍 Mapa: ${mapName}`,
       '',
-      ...streakLines,
+      streakLine,
+      '',
+      '🏅 ACHIEVEMENTS:',
+      achievementLines.length ? achievementLines.join('\n') : 'brak',
       '',
       '📈 ELO:',
       eloLines.trimEnd()
@@ -266,9 +283,6 @@ async function processMatches({
 
     await channel.send({ content: message, embeds: [statsEmbed] });
 
-    /* =========================
-       IMAGE SEND (PRZYWRÓCONE)
-    ========================== */
     const image = getRandomImage(isWin, lastImageRef);
     if (image) await channel.send({ files: [image] });
 
