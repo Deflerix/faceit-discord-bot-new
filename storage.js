@@ -18,7 +18,7 @@ class Storage {
       streaks: 'streaks.json',
       players: 'players.json',
       config: 'config.json',
-      grindSessions: 'grindSessions.json' // 🔥 DODANE
+      grindSessions: 'grindSessions.json'
     };
 
     this.checkedMatches = new Set(readJson(this.paths.matches, []));
@@ -28,11 +28,15 @@ class Storage {
     this.config = readJson(this.paths.config, {});
     this.matchLogger = matchLogger;
 
-    // 🔥 GRIND INIT
+    // 🔥 GRIND STATE
     this.grindSessions = readJson(this.paths.grindSessions, {});
 
     if (!Array.isArray(this.players)) this.players = [];
-    this.players = [...new Set(this.players.map(v => String(v).trim()).filter(Boolean))];
+    this.players = [
+      ...new Set(
+        this.players.map(v => String(v).trim()).filter(Boolean)
+      )
+    ];
 
     this.timers = new Map();
   }
@@ -42,6 +46,7 @@ class Storage {
 
     const timer = setTimeout(() => {
       this.timers.delete(key);
+
       try {
         fs.writeFileSync(
           this.paths[key],
@@ -56,7 +61,7 @@ class Storage {
   }
 
   /* =========================
-  PLAYERS
+     PLAYERS
   ========================= */
 
   getLegacyPlayers() {
@@ -66,9 +71,13 @@ class Storage {
   getPlayers() {
     if (this.matchLogger) {
       try {
-        return this.matchLogger.getAllPlayers().map(p => p.nickname);
+        return this.matchLogger
+          .getAllPlayers()
+          .map(p => p.nickname);
       } catch (err) {
-        console.error(`[STORAGE] fallback to JSON players: ${err.message}`);
+        console.error(
+          `[STORAGE] fallback to JSON players: ${err.message}`
+        );
       }
     }
     return this.getLegacyPlayers();
@@ -76,13 +85,17 @@ class Storage {
 
   addPlayerLegacy(nick) {
     const normalized = String(nick || '').trim();
-    if (!normalized) return { ok: false, reason: 'Nick jest pusty.' };
+    if (!normalized) {
+      return { ok: false, reason: 'Nick jest pusty.' };
+    }
 
     const exists = this.players.some(
       p => p.toLowerCase() === normalized.toLowerCase()
     );
 
-    if (exists) return { ok: false, reason: 'Gracz już istnieje.' };
+    if (exists) {
+      return { ok: false, reason: 'Gracz już istnieje.' };
+    }
 
     this.players.push(normalized);
     this.debounceWrite('players', () => this.players);
@@ -103,6 +116,7 @@ class Storage {
     }
 
     this.debounceWrite('players', () => this.players);
+
     return { ok: true, nick: normalized };
   }
 
@@ -110,7 +124,9 @@ class Storage {
     if (!this.matchLogger) return;
 
     const existing = new Set(
-      this.matchLogger.getAllPlayers().map(p => p.nickname.toLowerCase())
+      this.matchLogger
+        .getAllPlayers()
+        .map(p => p.nickname.toLowerCase())
     );
 
     for (const nick of this.getLegacyPlayers()) {
@@ -129,13 +145,15 @@ class Storage {
 
         console.log(`[DB] Legacy player synced: ${player.nickname || nick}`);
       } catch (err) {
-        console.error(`[STORAGE] sync failed for ${nick}: ${err.message}`);
+        console.error(
+          `[STORAGE] sync failed for ${nick}: ${err.message}`
+        );
       }
     }
   }
 
   /* =========================
-  CONFIG
+     CONFIG
   ========================= */
 
   getChannelId(fallback) {
@@ -148,7 +166,7 @@ class Storage {
   }
 
   /* =========================
-  MATCHES
+     MATCHES
   ========================= */
 
   hasLegacyMatch(matchId) {
@@ -157,13 +175,14 @@ class Storage {
 
   addMatch(matchId) {
     this.checkedMatches.add(matchId);
+
     this.debounceWrite('matches', () =>
       [...this.checkedMatches].slice(-100)
     );
   }
 
   /* =========================
-  LEADERBOARD
+     LEADERBOARD
   ========================= */
 
   incrementLeaderboard(userId) {
@@ -182,7 +201,7 @@ class Storage {
   }
 
   /* =========================
-  STREAKS
+     STREAKS
   ========================= */
 
   updateStreak(nick, type) {
@@ -190,6 +209,7 @@ class Storage {
     const prev = this.streaks[key];
 
     let next;
+
     if (!prev || prev.type !== type) {
       next = { type, count: 1 };
     } else {
@@ -203,7 +223,7 @@ class Storage {
   }
 
   /* =========================
-  🔥 GRIND SYSTEM (NEW)
+     🔥 GRIND SYSTEM
   ========================= */
 
   getGrindSessions() {
@@ -217,6 +237,4 @@ class Storage {
   }
 }
 
-module.exports = {
-  Storage
-};
+module.exports = new Storage(); // 🔥 FIX KRYTYCZNY
