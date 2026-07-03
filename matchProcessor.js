@@ -61,7 +61,7 @@ function toDateText(unixTs) {
   });
 }
 
-function buildLoggedPlayers(round, mvp, trackedMap, eloByNick, teamResults, isWin) {
+function buildLoggedPlayers(round, mvp, trackedMap, eloByNick, isWin) {
   return (round.teams || []).flatMap(team =>
     (team.players || []).map(player => {
       const lower = (player.nickname || '').toLowerCase();
@@ -93,6 +93,7 @@ async function processMatches({
   eloCache,
   matchLogger
 }) {
+
   const trackedPlayers = storage.getPlayers();
   if (!trackedPlayers.length) return;
 
@@ -149,7 +150,7 @@ async function processMatches({
 
     if (!ourTeam) continue;
 
-    // 🔥 FIX: enemyTeam ALWAYS defined
+    // FIXED enemyTeam safety (no crash)
     const enemyTeam = (round.teams || []).find(t => t !== ourTeam) || { players: [] };
 
     const { our, enemy } = getTeamScore(round, ourTeam);
@@ -166,6 +167,7 @@ async function processMatches({
 
     const mvp = getTopFragger(ourTeam.players || []);
 
+    // ELO
     let eloLines = '';
     const eloByNick = new Map();
 
@@ -175,7 +177,7 @@ async function processMatches({
         const elo = Number(p.games?.cs2?.faceit_elo ?? 0);
         const prev = Number.isFinite(Number(eloCache[nick])) ? Number(eloCache[nick]) : elo;
 
-        eloLines += `- ${nick} ${eloCache[nick] ?? 'X'} → ${elo}\n`;
+        eloLines += `- ${nick} X → ${elo}\n`;
 
         eloCache[nick] = elo;
 
@@ -189,6 +191,7 @@ async function processMatches({
       }
     }
 
+    // STREAK FIXED
     const streakLines = activeTracked.map(p => {
       const nickLower = (p.nickname || '').toLowerCase();
       const displayNick = trackedMap.get(nickLower) || p.nickname;
@@ -199,14 +202,16 @@ async function processMatches({
         )
       );
 
-      const streakType =
-        playerTeam && teamResults.get(playerTeam) === 'win' ? 'win' : 'lose';
+      const streakType = playerTeam && teamResults.get(playerTeam) === 'win'
+        ? 'win'
+        : 'lose';
 
       const streak = storage.updateStreak(displayNick, streakType);
 
       return `STREAK ${streak.type.toUpperCase()} ${streak.count} (${displayNick})`;
     });
 
+    // ACHIEVEMENTS
     const achievementLines = [];
 
     for (const p of activeTracked) {
@@ -236,13 +241,9 @@ async function processMatches({
 
     // SMART PING
     const activeNicknames = activeTracked.map(p => (p.nickname || '').toLowerCase());
-
-    const allCorePresent = CORE_PLAYERS.every(p =>
-      activeNicknames.includes(p)
-    );
+    const allCorePresent = CORE_PLAYERS.every(p => activeNicknames.includes(p));
 
     let mentions;
-
     if (allCorePresent) {
       mentions = getMention('core');
     } else {
@@ -287,6 +288,9 @@ async function processMatches({
       );
 
     await channel.send({ content: message, embeds: [statsEmbed] });
+
+    const image = getRandomImage(isWin, lastImageRef);
+    if (image) await channel.send({ files: [image] });
 
     storage.addMatch(matchId);
   }
