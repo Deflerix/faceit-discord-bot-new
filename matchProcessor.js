@@ -21,7 +21,10 @@ function formatPlayerStats(players = []) {
 }
 
 function getTeamScore(round, ourTeam) {
-  const [s1, s2] = (round.round_stats?.Score || '0/0').split('/').map(v => Number(v) || 0);
+  const [s1, s2] = (round.round_stats?.Score || '0/0')
+    .split('/')
+    .map(v => Number(v) || 0);
+
   const [team1] = round.teams || [];
   return ourTeam === team1 ? { our: s1, enemy: s2 } : { our: s2, enemy: s1 };
 }
@@ -96,7 +99,14 @@ function buildLoggedPlayers(round, mvp, trackedMap, eloByNick, teamResults, isWi
   );
 }
 
-async function processMatches({ client, storage, faceit, defaultChannelId, eloCache, matchLogger }) {
+async function processMatches({
+  client,
+  storage,
+  faceit,
+  defaultChannelId,
+  eloCache,
+  matchLogger
+}) {
   const trackedPlayers = storage.getPlayers();
   if (!trackedPlayers.length) return;
 
@@ -125,12 +135,10 @@ async function processMatches({ client, storage, faceit, defaultChannelId, eloCa
     try {
       matchExists = matchLogger.checkIfMatchExists(matchId);
     } catch (err) {
-      console.error(`[DB] fallback JSON check ${matchId}: ${err.message}`);
       matchExists = storage.hasLegacyMatch(matchId);
     }
 
     if (matchExists) {
-      console.log(`[DB] Duplicate match skipped: ${matchId}`);
       storage.addMatch(matchId);
       continue;
     }
@@ -153,8 +161,6 @@ async function processMatches({ client, storage, faceit, defaultChannelId, eloCa
     );
 
     if (!ourTeam) continue;
-
-    const enemyTeam = (round.teams || []).find(t => t !== ourTeam) || { players: [] };
 
     const { our, enemy } = getTeamScore(round, ourTeam);
     const isWin = our > enemy;
@@ -193,22 +199,26 @@ async function processMatches({ client, storage, faceit, defaultChannelId, eloCa
       }
     }
 
+    // 🔥 STREAK FIX (clean + stable)
     const streakLines = activeTracked.map(p => {
-      const displayNick = trackedMap.get((p.nickname || '').toLowerCase()) || p.nickname;
+      const nickLower = (p.nickname || '').toLowerCase();
+      const displayNick = trackedMap.get(nickLower) || p.nickname;
 
       const playerTeam = (round.teams || []).find(team =>
         (team.players || []).some(tp =>
-          (tp.nickname || '').toLowerCase() === (p.nickname || '').toLowerCase()
+          (tp.nickname || '').toLowerCase() === nickLower
         )
       );
 
-      const streakType = teamResults.get(playerTeam) === 'win' ? 'win' : 'lose';
+      const streakType =
+        playerTeam && teamResults.get(playerTeam) === 'win' ? 'win' : 'lose';
+
       const streak = storage.updateStreak(displayNick, streakType);
 
-      return `🔥 STREAK ${streak.type.toUpperCase()} ${streak.count} (${displayNick})`;
+      return `STREAK ${streak.type.toUpperCase()} ${streak.count} (${displayNick})`;
     });
 
-    // 🏅 ACHIEVEMENTS (NOWE)
+    // 🏅 ACHIEVEMENTS
     const achievementLines = [];
 
     for (const p of activeTracked) {
@@ -236,10 +246,25 @@ async function processMatches({ client, storage, faceit, defaultChannelId, eloCa
       }
     }
 
-    const mentions = activeTracked
-      .map(p => trackedMap.get((p.nickname || '').toLowerCase()) || p.nickname)
-      .map(getMention)
-      .join(' ');
+    // 👥 SMART PING
+    const activeNicknames = activeTracked.map(p =>
+      (p.nickname || '').toLowerCase()
+    );
+
+    const allCorePresent = CORE_PLAYERS.every(p =>
+      activeNicknames.includes(p)
+    );
+
+    let mentions;
+
+    if (allCorePresent) {
+      mentions = getMention('core');
+    } else {
+      mentions = activeTracked
+        .map(p => trackedMap.get((p.nickname || '').toLowerCase()) || p.nickname)
+        .map(getMention)
+        .join(' ');
+    }
 
     const rawTs =
       lastMatches.find(m => m?.match_id === matchId)?.finished_at ||
@@ -250,16 +275,19 @@ async function processMatches({ client, storage, faceit, defaultChannelId, eloCa
 
     const message = [
       `📊 Raport ${mentions}`,
+      ``,
       `📅 Data: ${dateText}`,
+      ``,
       resultText,
-      ...streakLines,
-      '',
+      ``,
+      `🌍 Mapa: ${mapName}`,
+      ``,
+      streakLines.join('\n'),
+      ``,
       `🏅 ACHIEVEMENTS:`,
       achievementLines.length ? achievementLines.join('\n') : 'brak',
-      '',
-      `🌍 Mapa: ${mapName}`,
-      '',
-      '📈 ELO:',
+      ``,
+      `📈 ELO:`,
       eloLines.trimEnd()
     ].join('\n');
 
@@ -287,7 +315,6 @@ async function processMatches({ client, storage, faceit, defaultChannelId, eloCa
         continue;
       }
     } catch (err) {
-      console.error(`[DB] insert failed ${matchId}: ${err.message}`);
       if (storage.hasLegacyMatch(matchId)) continue;
     }
 
