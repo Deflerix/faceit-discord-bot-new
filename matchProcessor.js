@@ -1,6 +1,5 @@
 const { EmbedBuilder } = require('discord.js');
 const { getReportAchievements } = require('./services/reportAchievements');
-const storage = require('./storage');
 
 const CORE_PLAYERS = ['deflerix', 'w4kky', 'pawik100737'];
 
@@ -24,6 +23,18 @@ function formatPlayerStats(players = []) {
     const nick = (p.nickname || '?').slice(0, 12);
     return `${nick.padEnd(12)} | ${kills}/${deaths} | KD:${kd.toFixed(2)} | HS:${hs}`;
   }).join('\n');
+}
+
+function getTeamScore(round, ourTeam) {
+  const [s1, s2] = (round.round_stats?.Score || '0/0')
+    .split('/')
+    .map(v => Number(v) || 0);
+
+  const teams = round.teams || [];
+  const index = teams.indexOf(ourTeam);
+
+  if (index === 0) return { our: s1, enemy: s2 };
+  return { our: s2, enemy: s1 };
 }
 
 function getTopFragger(players = []) {
@@ -55,6 +66,9 @@ function toDateText(unixTs) {
   });
 }
 
+/* =========================
+IMAGE SYSTEM (UNCHANGED)
+========================= */
 function getRandomImage(isWin, lastImageRef) {
   const images = isWin
     ? [process.env.IMAGE_WIN_1, process.env.IMAGE_WIN_2, process.env.IMAGE_WIN_3]
@@ -71,44 +85,6 @@ function getRandomImage(isWin, lastImageRef) {
   return selected;
 }
 
-/* =========================
-🔥 GRIND TRACKER (LIVE)
-========================= */
-function updateGrindSessions(matchId, matchTimeMs, isWin) {
-  const sessions = storage.getGrindSessions();
-
-  let changed = false;
-
-  for (const userId of Object.keys(sessions)) {
-    const session = sessions[userId];
-
-    if (!session || !session.startTime) continue;
-
-    if (matchTimeMs >= session.startTime) {
-      session.matches = session.matches || [];
-
-      if (!session.matches.includes(matchId)) {
-        session.matches.push(matchId);
-
-        session.wins = session.wins || 0;
-        session.loses = session.loses || 0;
-
-        if (isWin) session.wins++;
-        else session.loses++;
-
-        changed = true;
-      }
-    }
-  }
-
-  if (changed) {
-    storage.saveGrindSessions(sessions);
-  }
-}
-
-/* =========================
-MAIN PROCESS
-========================= */
 async function processMatches({
   client,
   storage,
@@ -142,7 +118,7 @@ async function processMatches({
   for (const matchId of uniqueMatchIds) {
 
     /* =========================
-    🔥 DUPLICATE PROTECTION
+    🔥 HARD DUPLICATE FIX (REAL)
     ========================= */
     let matchExists = false;
 
@@ -152,7 +128,10 @@ async function processMatches({
       matchExists = storage.hasLegacyMatch(matchId);
     }
 
-    if (matchExists || processedMatches.has(matchId)) continue;
+    if (matchExists || processedMatches.has(matchId)) {
+      continue;
+    }
+
     processedMatches.add(matchId);
 
     const stats = await faceit.getMatchStats(matchId, { ctx: tickCtx });
@@ -177,28 +156,15 @@ async function processMatches({
 
     const enemyTeam = (round.teams || []).find(t => t !== ourTeam) || { players: [] };
 
-    const s = round.round_stats?.Score || '0/0';
-    const [s1, s2] = s.split('/').map(v => Number(v) || 0);
+    const { our, enemy } = getTeamScore(round, ourTeam);
+    const isWin = our > enemy;
 
-    const isWin = ourTeam === round.winner || s1 > s2;
-
-    const resultText = `${isWin ? '🟢 WIN' : '🔴 LOSE'} | ${s1}:${s2}`;
+    const resultText = `${isWin ? '🟢 WIN' : '🔴 LOSE'} | ${our}:${enemy}`;
 
     const mvp = getTopFragger(ourTeam.players || []);
 
-    const rawTs =
-      lastMatches.find(m => m?.match_id === matchId)?.finished_at ||
-      Math.floor(Date.now() / 1000);
-
-    const matchTimeMs = rawTs * 1000;
-
     /* =========================
-    🔥 GRIND UPDATE (LIVE)
-    ========================= */
-    updateGrindSessions(matchId, matchTimeMs, isWin);
-
-    /* =========================
-    ELO
+    ELO + LVL
     ========================= */
     let eloLines = '';
     const eloByNick = new Map();
@@ -230,7 +196,7 @@ async function processMatches({
     }
 
     /* =========================
-    STREAK
+    STREAK (1 LINE ONLY)
     ========================= */
     const anchor = activeTracked[0];
     const streakType = isWin ? 'win' : 'lose';
@@ -273,11 +239,29 @@ async function processMatches({
     }
 
     /* =========================
-    MESSAGE
+    PING SYSTEM
     ========================= */
-    const mentions = activeTracked.map(p =>
-      getMention(p.nickname || '?')
-    ).join(' ');
+    const activeNicknames = activeTracked.map(p =>
+      (p.nickname || '').toLowerCase()
+    );
+
+    const allCorePresent = CORE_PLAYERS.every(p =>
+      activeNicknames.includes(p)
+    );
+
+    const coreRoleId = process.env.CORE_ROLE_ID;
+
+    const mentions =
+      allCorePresent && coreRoleId
+        ? `<@&${coreRoleId}>`
+        : activeTracked
+            .map(p => trackedMap.get((p.nickname || '').toLowerCase()) || p.nickname)
+            .map(getMention)
+            .join(' ');
+
+    const rawTs =
+      lastMatches.find(m => m?.match_id === matchId)?.finished_at ||
+      Math.floor(Date.now() / 1000);
 
     const dateText = toDateText(rawTs);
     const mapName = round.round_stats?.Map || '-';
@@ -315,5 +299,6 @@ async function processMatches({
 }
 
 module.exports = {
-  processMatches
+  processMatches,
+  getMention
 };
