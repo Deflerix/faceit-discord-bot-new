@@ -1,5 +1,4 @@
 const { EmbedBuilder } = require('discord.js');
-const { getReportAchievements } = require('./services/reportAchievements');
 
 const CORE_PLAYERS = ['deflerix', 'w4kky', 'pawik100737'];
 
@@ -16,6 +15,7 @@ function formatPlayerStats(players = []) {
     const deaths = s.Deaths ?? '-';
     const hs = s['Headshots %'] ?? '-';
     const nick = (p.nickname || '?').slice(0, 12);
+
     return `${nick.padEnd(12)} | ${kills}/${deaths} | KD:${kd.toFixed(2)} | HS:${hs}`;
   }).join('\n');
 }
@@ -61,6 +61,9 @@ function toDateText(unixTs) {
   });
 }
 
+/* =========================
+   🔥 IMAGE SYSTEM (PRZYWRÓCONE)
+========================= */
 function getRandomImage(isWin, lastImageRef) {
   const images = isWin
     ? [process.env.IMAGE_WIN_1, process.env.IMAGE_WIN_2, process.env.IMAGE_WIN_3]
@@ -74,31 +77,8 @@ function getRandomImage(isWin, lastImageRef) {
 
   const selected = pool[Math.floor(Math.random() * pool.length)];
   lastImageRef.value = selected;
+
   return selected;
-}
-
-function buildLoggedPlayers(round, mvp, trackedMap, eloByNick, isWin) {
-  return (round.teams || []).flatMap(team =>
-    (team.players || []).map(player => {
-      const lower = (player.nickname || '').toLowerCase();
-      const elo = eloByNick.get(lower) || { before: 0, after: 0, delta: 0 };
-
-      return {
-        player_id: player.player_id || '',
-        nickname: trackedMap.get(lower) || player.nickname || '?',
-        kills: getStatNumber(player, 'Kills'),
-        deaths: getStatNumber(player, 'Deaths'),
-        assists: getStatNumber(player, 'Assists'),
-        hs: getStatNumber(player, 'Headshots %'),
-        kd: getStatNumber(player, 'K/D Ratio'),
-        mvp: lower === (mvp.nick || '').toLowerCase(),
-        elo_before: elo.before,
-        elo_after: elo.after,
-        elo_delta: elo.delta,
-        result: isWin ? 'win' : 'loss'
-      };
-    })
-  );
 }
 
 async function processMatches({
@@ -109,7 +89,6 @@ async function processMatches({
   eloCache,
   matchLogger
 }) {
-
   const trackedPlayers = storage.getPlayers();
   if (!trackedPlayers.length) return;
 
@@ -137,11 +116,13 @@ async function processMatches({
     let matchExists = false;
     try {
       matchExists = matchLogger.checkIfMatchExists(matchId);
-    } catch {
+    } catch (err) {
+      console.error(`[DB] fallback to JSON match check for ${matchId}: ${err.message}`);
       matchExists = storage.hasLegacyMatch(matchId);
     }
 
     if (matchExists) {
+      console.log(`[DB] Duplicate match skipped: ${matchId}`);
       storage.addMatch(matchId);
       continue;
     }
@@ -151,7 +132,6 @@ async function processMatches({
     if (!round) continue;
 
     const allPlayers = (round.teams || []).flatMap(t => t.players || []);
-
     const activeTracked = allPlayers.filter(p =>
       trackedMap.has((p.nickname || '').toLowerCase())
     );
@@ -166,6 +146,7 @@ async function processMatches({
 
     if (!ourTeam) continue;
 
+    /* 🔧 FIX SAFE ENEMY TEAM (bez crashy) */
     const enemyTeam = (round.teams || []).find(t => t !== ourTeam) || { players: [] };
 
     const { our, enemy } = getTeamScore(round, ourTeam);
@@ -173,8 +154,18 @@ async function processMatches({
 
     const resultText = `${isWin ? '🟢 WIN' : '🔴 LOSE'} | ${our}:${enemy}`;
 
+    const teamResults = new Map(
+      (round.teams || []).map(team => {
+        const { our: a, enemy: b } = getTeamScore(round, team);
+        return [team, a > b ? 'win' : 'loss'];
+      })
+    );
+
     const mvp = getTopFragger(ourTeam.players || []);
 
+    /* =========================
+       ELO
+    ========================== */
     let eloLines = '';
     const eloByNick = new Map();
 
@@ -184,7 +175,7 @@ async function processMatches({
         const elo = Number(p.games?.cs2?.faceit_elo ?? 0);
         const prev = Number.isFinite(Number(eloCache[nick])) ? Number(eloCache[nick]) : elo;
 
-        eloLines += `- ${nick} X → ${elo}\n`;
+        eloLines += `- ${nick} ${eloCache[nick] ?? 'X'} → ${elo}\n`;
 
         eloCache[nick] = elo;
 
@@ -198,54 +189,43 @@ async function processMatches({
       }
     }
 
-    // STREAK (FIXED — no team mapping bugs)
+    /* =========================
+       STREAK (ORIGINAL BEHAVIOR)
+    ========================== */
     const streakLines = activeTracked.map(p => {
-      const nickLower = (p.nickname || '').toLowerCase();
-      const displayNick = trackedMap.get(nickLower) || p.nickname;
+      const displayNick = trackedMap.get((p.nickname || '').toLowerCase()) || p.nickname;
 
-      const streak = storage.updateStreak(
-        displayNick,
-        isWin ? 'win' : 'lose'
+      const playerTeam = (round.teams || []).find(t =>
+        (t.players || []).some(tp =>
+          (tp.nickname || '').toLowerCase() === (p.nickname || '').toLowerCase()
+        )
       );
 
-      return `STREAK ${streak.type.toUpperCase()} ${streak.count} (${displayNick})`;
+      const streakType =
+        playerTeam && teamResults.get(playerTeam) === 'win' ? 'win' : 'lose';
+
+      const streak = storage.updateStreak(displayNick, streakType);
+
+      return `🔥 STREAK ${streak.type.toUpperCase()} ${streak.count} (${displayNick})`;
     });
 
-    // ACHIEVEMENTS
-    const achievementLines = [];
+    /* =========================
+       CORE ROLE PING FIX
+    ========================== */
+    const activeNicknames = activeTracked.map(p =>
+      (p.nickname || '').toLowerCase()
+    );
 
-    for (const p of activeTracked) {
-      const nickLower = (p.nickname || '').toLowerCase();
-      const displayNick = trackedMap.get(nickLower) || p.nickname || '?';
+    const allCorePresent = CORE_PLAYERS.every(p =>
+      activeNicknames.includes(p)
+    );
 
-      const elo = eloByNick.get(nickLower) || { delta: 0 };
-
-      const playerObj = {
-        nickname: displayNick,
-        kills: getStatNumber(p, 'Kills'),
-        deaths: getStatNumber(p, 'Deaths'),
-        assists: getStatNumber(p, 'Assists'),
-        hs: getStatNumber(p, 'Headshots %'),
-        kd: getStatNumber(p, 'K/D Ratio'),
-        mvp: nickLower === (mvp.nick || '').toLowerCase(),
-        elo_delta: elo.delta,
-        result: isWin ? 'win' : 'loss'
-      };
-
-      const badges = getReportAchievements(playerObj);
-
-      if (badges.length) {
-        achievementLines.push(`${displayNick} - ${badges.join(' • ')}`);
-      }
-    }
-
-    // SMART PING
-    const activeNicknames = activeTracked.map(p => (p.nickname || '').toLowerCase());
-    const allCorePresent = CORE_PLAYERS.every(p => activeNicknames.includes(p));
+    const coreRoleId = process.env.CORE_ROLE_ID;
 
     let mentions;
-    if (allCorePresent) {
-      mentions = getMention('core');
+
+    if (allCorePresent && coreRoleId) {
+      mentions = `<@&${coreRoleId}>`;
     } else {
       mentions = activeTracked
         .map(p => trackedMap.get((p.nickname || '').toLowerCase()) || p.nickname)
@@ -260,21 +240,18 @@ async function processMatches({
     const dateText = toDateText(rawTs);
     const mapName = round.round_stats?.Map || '-';
 
+    /* =========================
+       MESSAGE (BEZ ZMIAN FLOW)
+    ========================== */
     const message = [
       `📊 Raport ${mentions}`,
-      ``,
       `📅 Data: ${dateText}`,
-      ``,
       resultText,
-      ``,
       `🌍 Mapa: ${mapName}`,
-      ``,
-      streakLines.join('\n'),
-      ``,
-      `🏅 ACHIEVEMENTS:`,
-      achievementLines.length ? achievementLines.join('\n') : 'brak',
-      ``,
-      `📈 ELO:`,
+      '',
+      ...streakLines,
+      '',
+      '📈 ELO:',
       eloLines.trimEnd()
     ].join('\n');
 
@@ -289,6 +266,9 @@ async function processMatches({
 
     await channel.send({ content: message, embeds: [statsEmbed] });
 
+    /* =========================
+       IMAGE SEND (PRZYWRÓCONE)
+    ========================== */
     const image = getRandomImage(isWin, lastImageRef);
     if (image) await channel.send({ files: [image] });
 
