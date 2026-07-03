@@ -61,6 +61,22 @@ function toDateText(unixTs) {
   });
 }
 
+function getRandomImage(isWin, lastImageRef) {
+  const images = isWin
+    ? [process.env.IMAGE_WIN_1, process.env.IMAGE_WIN_2, process.env.IMAGE_WIN_3]
+    : [process.env.IMAGE_LOSE_1, process.env.IMAGE_LOSE_2, process.env.IMAGE_LOSE_3];
+
+  const allValid = images.filter(Boolean);
+  const valid = allValid.filter(img => img !== lastImageRef.value);
+  const pool = valid.length ? valid : allValid;
+
+  if (!pool.length) return null;
+
+  const selected = pool[Math.floor(Math.random() * pool.length)];
+  lastImageRef.value = selected;
+  return selected;
+}
+
 function buildLoggedPlayers(round, mvp, trackedMap, eloByNick, isWin) {
   return (round.teams || []).flatMap(team =>
     (team.players || []).map(player => {
@@ -150,7 +166,6 @@ async function processMatches({
 
     if (!ourTeam) continue;
 
-    // FIXED enemyTeam safety (no crash)
     const enemyTeam = (round.teams || []).find(t => t !== ourTeam) || { players: [] };
 
     const { our, enemy } = getTeamScore(round, ourTeam);
@@ -158,16 +173,8 @@ async function processMatches({
 
     const resultText = `${isWin ? '🟢 WIN' : '🔴 LOSE'} | ${our}:${enemy}`;
 
-    const teamResults = new Map(
-      (round.teams || []).map(team => {
-        const { our: a, enemy: b } = getTeamScore(round, team);
-        return [team, a > b ? 'win' : 'loss'];
-      })
-    );
-
     const mvp = getTopFragger(ourTeam.players || []);
 
-    // ELO
     let eloLines = '';
     const eloByNick = new Map();
 
@@ -191,22 +198,15 @@ async function processMatches({
       }
     }
 
-    // STREAK FIXED
+    // STREAK (FIXED — no team mapping bugs)
     const streakLines = activeTracked.map(p => {
       const nickLower = (p.nickname || '').toLowerCase();
       const displayNick = trackedMap.get(nickLower) || p.nickname;
 
-      const playerTeam = (round.teams || []).find(t =>
-        (t.players || []).some(tp =>
-          (tp.nickname || '').toLowerCase() === nickLower
-        )
+      const streak = storage.updateStreak(
+        displayNick,
+        isWin ? 'win' : 'lose'
       );
-
-      const streakType = playerTeam && teamResults.get(playerTeam) === 'win'
-        ? 'win'
-        : 'lose';
-
-      const streak = storage.updateStreak(displayNick, streakType);
 
       return `STREAK ${streak.type.toUpperCase()} ${streak.count} (${displayNick})`;
     });
