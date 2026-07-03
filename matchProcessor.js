@@ -25,8 +25,11 @@ function getTeamScore(round, ourTeam) {
     .split('/')
     .map(v => Number(v) || 0);
 
-  const [team1] = round.teams || [];
-  return ourTeam === team1 ? { our: s1, enemy: s2 } : { our: s2, enemy: s1 };
+  const teams = round.teams || [];
+  const index = teams.indexOf(ourTeam);
+
+  if (index === 0) return { our: s1, enemy: s2 };
+  return { our: s2, enemy: s1 };
 }
 
 function getTopFragger(players = []) {
@@ -42,19 +45,10 @@ function getTopFragger(players = []) {
   }, { nick: '?', kills: -1 });
 }
 
-function getRandomImage(isWin, lastImageRef) {
-  const images = isWin
-    ? [process.env.IMAGE_WIN_1, process.env.IMAGE_WIN_2, process.env.IMAGE_WIN_3]
-    : [process.env.IMAGE_LOSE_1, process.env.IMAGE_LOSE_2, process.env.IMAGE_LOSE_3];
-
-  const allValid = images.filter(Boolean);
-  const valid = allValid.filter(img => img !== lastImageRef.value);
-  const pool = valid.length ? valid : allValid;
-  if (!pool.length) return null;
-
-  const selected = pool[Math.floor(Math.random() * pool.length)];
-  lastImageRef.value = selected;
-  return selected;
+function getStatNumber(player, statName, fallback = 0) {
+  const raw = player?.player_stats?.[statName];
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : fallback;
 }
 
 function toDateText(unixTs) {
@@ -67,29 +61,21 @@ function toDateText(unixTs) {
   });
 }
 
-function getStatNumber(player, statName, fallback = 0) {
-  const raw = player?.player_stats?.[statName];
-  const value = Number(raw);
-  return Number.isFinite(value) ? value : fallback;
-}
-
 function buildLoggedPlayers(round, mvp, trackedMap, eloByNick, teamResults, isWin) {
   return (round.teams || []).flatMap(team =>
     (team.players || []).map(player => {
-      const lowerNick = (player.nickname || '').toLowerCase();
-      const displayNick = trackedMap.get(lowerNick) || player.nickname || '?';
-
-      const elo = eloByNick.get(lowerNick) || { before: 0, after: 0, delta: 0 };
+      const lower = (player.nickname || '').toLowerCase();
+      const elo = eloByNick.get(lower) || { before: 0, after: 0, delta: 0 };
 
       return {
         player_id: player.player_id || '',
-        nickname: displayNick,
+        nickname: trackedMap.get(lower) || player.nickname || '?',
         kills: getStatNumber(player, 'Kills'),
         deaths: getStatNumber(player, 'Deaths'),
         assists: getStatNumber(player, 'Assists'),
         hs: getStatNumber(player, 'Headshots %'),
         kd: getStatNumber(player, 'K/D Ratio'),
-        mvp: (player.nickname || '').toLowerCase() === (mvp.nick || '').toLowerCase(),
+        mvp: lower === (mvp.nick || '').toLowerCase(),
         elo_before: elo.before,
         elo_after: elo.after,
         elo_delta: elo.delta,
@@ -134,7 +120,7 @@ async function processMatches({
     let matchExists = false;
     try {
       matchExists = matchLogger.checkIfMatchExists(matchId);
-    } catch (err) {
+    } catch {
       matchExists = storage.hasLegacyMatch(matchId);
     }
 
@@ -147,8 +133,9 @@ async function processMatches({
     const round = stats?.rounds?.[0];
     if (!round) continue;
 
-    const allRoundPlayers = (round.teams || []).flatMap(t => t.players || []);
-    const activeTracked = allRoundPlayers.filter(p =>
+    const allPlayers = (round.teams || []).flatMap(t => t.players || []);
+
+    const activeTracked = allPlayers.filter(p =>
       trackedMap.has((p.nickname || '').toLowerCase())
     );
 
@@ -161,6 +148,9 @@ async function processMatches({
     );
 
     if (!ourTeam) continue;
+
+    // 🔥 FIX: enemyTeam ALWAYS defined
+    const enemyTeam = (round.teams || []).find(t => t !== ourTeam) || { players: [] };
 
     const { our, enemy } = getTeamScore(round, ourTeam);
     const isWin = our > enemy;
@@ -199,13 +189,12 @@ async function processMatches({
       }
     }
 
-    // 🔥 STREAK FIX (clean + stable)
     const streakLines = activeTracked.map(p => {
       const nickLower = (p.nickname || '').toLowerCase();
       const displayNick = trackedMap.get(nickLower) || p.nickname;
 
-      const playerTeam = (round.teams || []).find(team =>
-        (team.players || []).some(tp =>
+      const playerTeam = (round.teams || []).find(t =>
+        (t.players || []).some(tp =>
           (tp.nickname || '').toLowerCase() === nickLower
         )
       );
@@ -218,7 +207,6 @@ async function processMatches({
       return `STREAK ${streak.type.toUpperCase()} ${streak.count} (${displayNick})`;
     });
 
-    // 🏅 ACHIEVEMENTS
     const achievementLines = [];
 
     for (const p of activeTracked) {
@@ -234,7 +222,7 @@ async function processMatches({
         assists: getStatNumber(p, 'Assists'),
         hs: getStatNumber(p, 'Headshots %'),
         kd: getStatNumber(p, 'K/D Ratio'),
-        mvp: (mvp.nick || '').toLowerCase() === nickLower,
+        mvp: nickLower === (mvp.nick || '').toLowerCase(),
         elo_delta: elo.delta,
         result: isWin ? 'win' : 'loss'
       };
@@ -246,10 +234,8 @@ async function processMatches({
       }
     }
 
-    // 👥 SMART PING
-    const activeNicknames = activeTracked.map(p =>
-      (p.nickname || '').toLowerCase()
-    );
+    // SMART PING
+    const activeNicknames = activeTracked.map(p => (p.nickname || '').toLowerCase());
 
     const allCorePresent = CORE_PLAYERS.every(p =>
       activeNicknames.includes(p)
@@ -300,28 +286,7 @@ async function processMatches({
         { name: 'MVP', value: mvp.nick || '?', inline: true }
       );
 
-    try {
-      const inserted = matchLogger.insertMatch({
-        match_id: matchId,
-        timestamp: rawTs,
-        map: mapName,
-        team_a_score: Number((round.round_stats?.Score || '0/0').split('/')[0]) || 0,
-        team_b_score: Number((round.round_stats?.Score || '0/0').split('/')[1]) || 0,
-        players: buildLoggedPlayers(round, mvp, trackedMap, eloByNick, teamResults, isWin)
-      });
-
-      if (!inserted) {
-        storage.addMatch(matchId);
-        continue;
-      }
-    } catch (err) {
-      if (storage.hasLegacyMatch(matchId)) continue;
-    }
-
     await channel.send({ content: message, embeds: [statsEmbed] });
-
-    const image = getRandomImage(isWin, lastImageRef);
-    if (image) await channel.send({ files: [image] });
 
     storage.addMatch(matchId);
   }
