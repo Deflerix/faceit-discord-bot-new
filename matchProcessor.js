@@ -262,9 +262,18 @@ async function processMatches({
       `📅 Data: ${dateText}`,
       resultText,
       `🌍 Mapa: ${mapName}`,
+
+      '', // 👈 PRZERWA PO MAPIE
+
       streakLine,
+
+      '', // 👈 PRZERWA PO STREAK
+
       `🏅 ACHIEVEMENTS:`,
       achievementLines.length ? achievementLines.join('\n') : 'brak',
+
+      '', // 👈 PRZERWA PO ACHIEVEMENTS
+
       `📈 ELO:`,
       eloLines.trimEnd()
     ].join('\n');
