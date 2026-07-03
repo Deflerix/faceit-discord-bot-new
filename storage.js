@@ -197,33 +197,34 @@ class Storage {
     this.debounceWrite('streaks', () => this.streaks);
 
     return next;
-async syncLegacyPlayers(faceit) {
-  if (!this.matchLogger) return;
+  
+    async syncLegacyPlayers(faceit) {
+    if (!this.matchLogger) return;
 
-  const existing = new Set(
-    this.matchLogger.getAllPlayers().map(p => p.nickname.toLowerCase())
-  );
+    const existing = new Set(
+      this.matchLogger.getAllPlayers().map(p => p.nickname.toLowerCase())
+    );
 
-  for (const nick of this.getLegacyPlayers()) {
-    if (existing.has(nick.toLowerCase())) continue;
+    for (const nick of this.getLegacyPlayers()) {
+      if (existing.has(nick.toLowerCase())) continue;
 
-    try {
-      const player = await faceit.getPlayer(nick);
+      try {
+        const player = await faceit.getPlayer(nick);
 
-      this.matchLogger.upsertPlayer({
-        player_id: player.player_id,
-        nickname: player.nickname || nick,
-        active: true
-      });
+        this.matchLogger.upsertPlayer({
+          player_id: player.player_id,
+          nickname: player.nickname || nick,
+          active: true
+        });
 
-      existing.add((player.nickname || nick).toLowerCase());
-      console.log(`[DB] Legacy player synced: ${player.nickname || nick}`);
+        existing.add((player.nickname || nick).toLowerCase());
+        console.log(`[DB] Legacy player synced: ${player.nickname || nick}`);
 
-    } catch (err) {
-      console.error(`[STORAGE] legacy sync failed for ${nick}: ${err.message}`);
+      } catch (err) {
+        console.error(`[STORAGE] legacy sync failed for ${nick}: ${err.message}`);
+      }
     }
   }
-}
     
 module.exports = {
   Storage
