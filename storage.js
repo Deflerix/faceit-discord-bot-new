@@ -58,7 +58,7 @@ class Storage {
   }
 
   /* =========================
-  GRIND SYSTEM 🔥
+     GRIND SYSTEM 🔥
   ========================= */
 
   startGrind(userId) {
@@ -69,7 +69,6 @@ class Storage {
     };
 
     this.debounceWrite('grindSessions', () => this.grindSessions);
-
     return this.grindSessions.active;
   }
 
@@ -91,7 +90,6 @@ class Storage {
     if (!this.grindSessions.active) return;
 
     this.grindSessions.active.matches.push(match);
-
     this.debounceWrite('grindSessions', () => this.grindSessions);
   }
 
@@ -100,7 +98,7 @@ class Storage {
   }
 
   /* =========================
-  PLAYERS
+     PLAYERS
   ========================= */
 
   getLegacyPlayers() {
@@ -190,43 +188,51 @@ class Storage {
     const prev = this.streaks[key];
 
     let next;
-    if (!prev || prev.type !== type) next = { type, count: 1 };
-    else next = { type, count: prev.count + 1 };
+    if (!prev || prev.type !== type) {
+      next = { type, count: 1 };
+    } else {
+      next = { type, count: prev.count + 1 };
+    }
 
     this.streaks[key] = next;
     this.debounceWrite('streaks', () => this.streaks);
 
     return next;
   }
-  
+
+  /* =========================
+     LEGACY SYNC
+  ========================= */
+
   async syncLegacyPlayers(faceit) {
-  if (!this.matchLogger) return;
+    if (!this.matchLogger) return;
 
-  const existing = new Set(
-     this.matchLogger.getAllPlayers().map(p => p.nickname.toLowerCase())
-   );
+    const existing = new Set(
+      this.matchLogger.getAllPlayers().map(p => p.nickname.toLowerCase())
+    );
 
-   for (const nick of this.getLegacyPlayers()) {
-    if (existing.has(nick.toLowerCase())) continue;
+    for (const nick of this.getLegacyPlayers()) {
+      if (existing.has(nick.toLowerCase())) continue;
 
-     try {
-       const player = await faceit.getPlayer(nick);
+      try {
+        const player = await faceit.getPlayer(nick);
 
-       this.matchLogger.upsertPlayer({
-        player_id: player.player_id,
-         nickname: player.nickname || nick,
-         active: true
-      });
+        this.matchLogger.upsertPlayer({
+          player_id: player.player_id,
+          nickname: player.nickname || nick,
+          active: true
+        });
 
-       existing.add((player.nickname || nick).toLowerCase());
-      console.log(`[DB] Legacy player synced: ${player.nickname || nick}`);
+        existing.add((player.nickname || nick).toLowerCase());
+        console.log(`[DB] Legacy player synced: ${player.nickname || nick}`);
 
-     } catch (err) {
-      console.error(`[STORAGE] legacy sync failed for ${nick}: ${err.message}`);
-     }
-   }
+      } catch (err) {
+        console.error(`[STORAGE] legacy sync failed for ${nick}: ${err.message}`);
+      }
+    }
+  }
 }
-    
+
 module.exports = {
   Storage
 };
