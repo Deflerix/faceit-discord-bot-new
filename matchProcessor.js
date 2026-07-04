@@ -289,12 +289,40 @@ async function processMatches({
         { name: 'MVP', value: mvp.nick || '?', inline: true }
       );
 
-    await channel.send({ content: message, embeds: [statsEmbed] });
+  await channel.send({ content: message, embeds: [statsEmbed] });
 
-    const image = getRandomImage(isWin, lastImageRef);
-    if (image) await channel.send({ files: [image] });
+  const image = getRandomImage(isWin, lastImageRef);
+  if (image) await channel.send({ files: [image] });
 
-    storage.addMatch(matchId);
+/* =========================
+🔥 SAVE MATCH TO ACTIVE GRIND
+========================= */
+
+  storage.addMatchToGrind({
+    id: matchId,
+    isWin,
+
+    map: mapName,
+    score: `${our}:${enemy}`,
+
+    mvp: mvp.nick,
+
+    players: ourTeam.players.map(p => ({
+      nickname: p.nickname,
+
+      kills: Number(p.player_stats?.Kills || 0),
+      deaths: Number(p.player_stats?.Deaths || 0),
+      hs: Number(p.player_stats?.['Headshots %'] || 0),
+
+      // na razie zostają jako placeholdery
+      kd: 0,
+      adr: 0,
+      kr: 0,
+      assists: 0
+    }))
+  });
+
+  storage.addMatch(matchId);
   }
 }
 
