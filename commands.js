@@ -134,15 +134,46 @@ async function handleCommand(interaction, storage, { faceit, matchLogger } = {})
       return `${name} | ${s.kills}/${s.deaths} | KD:${avgKD} | HS:${avgHS}`;
     }).join('\n');
 
-    const embed = new EmbedBuilder()
-      .setTitle('🎮 FC GRIND REPORT')
-      .setColor(0x2ecc71)
-      .addFields(
-        { name: '📊 Score', value: `${wins}W / ${losses}L`, inline: true },
-        { name: '⏱️ Duration', value: `${durationMin} min`, inline: true },
-        { name: '🏆 Best match', value: bestMatch ? `${bestMatch.kills} kills` : 'brak', inline: false },
-        { name: '📈 Stats', value: statsLines || 'brak danych' }
-      );
+  const embed = new EmbedBuilder()
+    .setTitle('🎮 FC Grind Report')
+    .setColor(0x2ecc71)
+    .setDescription(
+  `👥 Team: @core
+  📅 Data: ${new Date(session.startedAt).toLocaleString('pl-PL')}
+  ⏱️ Czas: ${durationMin} min
+  ━━━━━━━━━━━━━━━━━━
+  🏆 Wynik
+  🟢 ${wins} Win
+  🔴 ${losses} Lose
+  📈 Winrate: ${((wins / (wins + losses)) * 100).toFixed(1)}%
+  🔥 Longest Winstreak: TBD
+  ━━━━━━━━━━━━━━━━━━
+  ⭐ Best Match
+  📊 ${bestMatch ? bestMatch.kills + ' kills' : 'brak'}
+  👑 MVP
+  TBD
+  ━━━━━━━━━━━━━━━━━━
+  🏅 Achievements Earned
+  (brak systemu jeszcze)
+  🏆 Total Achievements: 0
+  ━━━━━━━━━━━━━━━━━━
+  📈 ELO
+  (brak podpiętego systemu ELO per player)
+  ━━━━━━━━━━━━━━━━━━
+  📊 Player Stats
+  ${statsLines || 'brak danych'}
+  ━━━━━━━━━━━━━━━━━━
+  📊 Team Average
+  ⚔️ KD: TBD
+  🎯 HS: TBD
+  💣 ADR: TBD
+  💥 K/R: TBD
+  ━━━━━━━━━━━━━━━━━━
+  🏁 Grind Summary
+  🎮 Matches Played: ${wins + losses}
+  📈 Team ELO Gained: TBD
+  🏆 MVP of the Grind: TBD`
+    );
 
     await interaction.reply({ embeds: [embed] });
     return;
