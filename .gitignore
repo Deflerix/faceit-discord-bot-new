@@ -1,4 +1,0 @@
-.env
-db/*.db
-db/*.db-*
-node_modules/
