@@ -3,7 +3,7 @@ const { Client, GatewayIntentBits } = require('discord.js');
 const express = require('express');
 const { Storage } = require('./storage');
 const { createFaceitService } = require('./faceit');
-const { processMatches, ACTIVE_ROSTER } = require('./matchProcessor');
+const { processMatches, ROSTER_NICKS } = require('./matchProcessor');
 const { registerCommands, handleCommand } = require('./commands');
 const matchLogger = require('./services/matchLogger');
 
@@ -49,7 +49,7 @@ client.once('ready', async () => {
     matchLogger.initDatabase();
     await storage.syncLegacyPlayers(faceit);
     try {
-      await storage.ensureDefaultPlayers(faceit, ACTIVE_ROSTER);
+      await storage.ensureDefaultPlayers(faceit, ROSTER_NICKS);
     } catch (err) {
       console.error(`[ERROR] Dodawanie domyślnych graczy nie powiodło się: ${err.message}`);
     }
