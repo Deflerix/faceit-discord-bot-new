@@ -7,6 +7,10 @@ const CORE_PLAYERS = ['deflerix', 'w4kky', 'pawik100737'];
 // zamiast @core oraz liczony jest streak. Nicki małymi literami.
 const ACTIVE_ROSTER = [...CORE_PLAYERS, 'fazardrx', 'foxer36'];
 
+// Dokładna pisownia nicków na FACEIT – API rozróżnia wielkość liter,
+// więc to ta lista służy do automatycznego dodawania graczy (ensureDefaultPlayers).
+const ROSTER_NICKS = ['Deflerix', 'W4KKY', 'pawik100737', 'FazardRX', 'Foxer36'];
+
 // Prefiks nazwy emotki poziomu na serwerze (lvl1 ... lvl10). Można zmienić w .env.
 const LEVEL_EMOJI_PREFIX = process.env.LEVEL_EMOJI_PREFIX || 'lvl';
 
@@ -439,5 +443,6 @@ async function processMatches({
 module.exports = {
   processMatches,
   getMention,
-  ACTIVE_ROSTER
+  ACTIVE_ROSTER,
+  ROSTER_NICKS
 };
